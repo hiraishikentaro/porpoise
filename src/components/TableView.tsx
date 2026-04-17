@@ -16,7 +16,10 @@ import {
   type CellChange,
   type ColumnInfo,
   commitChanges,
+  type Filter,
+  type FilterMatch,
   type RowChange,
+  type SortKey,
   selectTableRows,
   type TablePage,
 } from "@/lib/tauri";
@@ -86,6 +89,24 @@ type ContextMenu = {
   target: ContextTarget;
 };
 
+type FilterOp = Filter["op"];
+
+type FilterDraft = {
+  id: string;
+  column: string;
+  op: FilterOp;
+  value: string;
+};
+
+function filterDraftToFilter(d: FilterDraft): Filter | null {
+  const col = d.column.trim();
+  if (!col) return null;
+  if (d.op === "is_null" || d.op === "is_not_null") {
+    return { column: col, op: d.op };
+  }
+  return { column: col, op: d.op, value: d.value };
+}
+
 export function TableView({ connectionId, database, table, columns }: Props) {
   const [state, setState] = useState<State>(initialState);
   const [edits, setEdits] = useState<EditMap>({});
@@ -96,6 +117,12 @@ export function TableView({ connectionId, database, table, columns }: Props) {
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
+  const [filterDrafts, setFilterDrafts] = useState<FilterDraft[]>([]);
+  const [filterMatchDraft, setFilterMatchDraft] = useState<FilterMatch>("all");
+  const [filtersOpen, setFiltersOpen] = useState(false);
+  const [appliedFilters, setAppliedFilters] = useState<Filter[]>([]);
+  const [appliedFilterMatch, setAppliedFilterMatch] = useState<FilterMatch>("all");
 
   // Click anywhere / Esc で閉じる
   useEffect(() => {
@@ -143,6 +170,12 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           table,
           offset,
           PAGE_SIZE,
+          {
+            sort: sortKeys.length > 0 ? sortKeys : undefined,
+            filters: appliedFilters.length > 0 ? appliedFilters : undefined,
+            filterMatch:
+              appliedFilters.length > 0 && appliedFilterMatch === "any" ? "any" : undefined,
+          },
         );
         setState((s) => {
           const rows = reset ? page.rows : [...s.rows, ...page.rows];
@@ -158,12 +191,45 @@ export function TableView({ connectionId, database, table, columns }: Props) {
         setState((s) => ({ ...s, loading: false, error: String(err) }));
       }
     },
-    [connectionId, database, table],
+    [connectionId, database, table, sortKeys, appliedFilters, appliedFilterMatch],
   );
 
   useEffect(() => {
     loadPage(true);
   }, [loadPage]);
+
+  function cycleSort(column: string) {
+    setSortKeys((prev) => {
+      const existing = prev.find((k) => k.column === column);
+      if (!existing) {
+        // append as ASC (shift-click could extend multi-sort; MVP は単一ソート)
+        return [{ column, descending: false }];
+      }
+      if (!existing.descending) {
+        // ASC → DESC
+        return prev.map((k) => (k.column === column ? { ...k, descending: true } : k));
+      }
+      // DESC → clear
+      return prev.filter((k) => k.column !== column);
+    });
+  }
+
+  function applyFilters() {
+    const valid: Filter[] = [];
+    for (const d of filterDrafts) {
+      const f = filterDraftToFilter(d);
+      if (f) valid.push(f);
+    }
+    setAppliedFilters(valid);
+    setAppliedFilterMatch(filterMatchDraft);
+  }
+
+  function clearAllFilters() {
+    setFilterDrafts([]);
+    setAppliedFilters([]);
+    setFilterMatchDraft("all");
+    setAppliedFilterMatch("all");
+  }
 
   /**
    * Virtualized rendering は「新規行 + 既存行」のフラットリストで動かす。
@@ -384,12 +450,25 @@ export function TableView({ connectionId, database, table, columns }: Props) {
         <span className="text-muted-foreground">
           {state.rows.length} row{state.rows.length === 1 ? "" : "s"}
           {state.reachedEnd ? "" : "+"}
+          {appliedFilters.length > 0 && <span className="ml-2 text-accent">· filtered</span>}
           {!editable && columns.length > 0 && (
             <span className="ml-2 text-muted-foreground/70">· read-only (no primary key)</span>
           )}
         </span>
         <div className="flex items-center gap-2">
           {state.loading && <span className="text-muted-foreground">Loading…</span>}
+          <button
+            type="button"
+            onClick={() => setFiltersOpen((v) => !v)}
+            className={`rounded-md border px-2 py-0.5 text-xs ${
+              filtersOpen || appliedFilters.length > 0
+                ? "border-accent text-accent"
+                : "border-border text-muted-foreground hover:border-accent hover:text-accent"
+            }`}
+            title="Toggle filter bar"
+          >
+            Filter{appliedFilters.length > 0 ? ` (${appliedFilters.length})` : ""}
+          </button>
           {editable && (
             <button
               type="button"
@@ -421,6 +500,19 @@ export function TableView({ connectionId, database, table, columns }: Props) {
         </div>
       </header>
 
+      {filtersOpen && (
+        <FilterBar
+          columns={state.columnNames.length ? state.columnNames : columns.map((c) => c.name)}
+          drafts={filterDrafts}
+          setDrafts={setFilterDrafts}
+          match={filterMatchDraft}
+          setMatch={setFilterMatchDraft}
+          onApply={applyFilters}
+          onClearAll={clearAllFilters}
+          appliedCount={appliedFilters.length}
+        />
+      )}
+
       {state.error && (
         <p className="m-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
           {state.error}
@@ -439,11 +531,15 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           >
             {state.columnNames.map((col, i) => {
               const pk = columnIsPk(i);
+              const sort = sortKeys.find((k) => k.column === col);
               return (
-                <div
+                <button
+                  type="button"
                   key={col}
                   style={{ width: colWidths[i] }}
-                  className="flex shrink-0 items-center gap-1.5 border-r border-border/60 px-3 py-2"
+                  onClick={() => cycleSort(col)}
+                  className="flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border/60 px-3 py-2 text-left hover:bg-sidebar-accent/40"
+                  title="Click to sort"
                 >
                   {pk && (
                     <span className="rounded-sm bg-accent/15 px-1 text-[0.55rem] font-semibold tracking-wide text-accent">
@@ -451,7 +547,12 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                     </span>
                   )}
                   <span className="truncate">{col}</span>
-                </div>
+                  {sort && (
+                    <span aria-hidden className="ml-auto text-[0.7rem] text-accent">
+                      {sort.descending ? "▼" : "▲"}
+                    </span>
+                  )}
+                </button>
               );
             })}
           </div>
@@ -490,10 +591,11 @@ export function TableView({ connectionId, database, table, columns }: Props) {
               const row = state.rows[existingRowIdx];
               const rowDeleted = deletedRows.has(existingRowIdx);
               return (
-                // biome-ignore lint/a11y/useKeyWithClickEvents: right-click handler is primary; row has focusable cells
-                // biome-ignore lint/a11y/noStaticElementInteractions: virtualised row container
+                // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
                 <div
                   key={virtualRow.key}
+                  role="row"
+                  tabIndex={-1}
                   className={`absolute top-0 left-0 flex border-b border-border/30 text-sm odd:bg-sidebar-accent/20 hover:bg-sidebar-accent/40 ${
                     rowDeleted ? "bg-destructive/15" : ""
                   }`}
@@ -660,6 +762,181 @@ export function TableView({ connectionId, database, table, columns }: Props) {
   );
 }
 
+const FILTER_OPS: { value: FilterOp; label: string; hasValue: boolean }[] = [
+  { value: "eq", label: "=", hasValue: true },
+  { value: "ne", label: "≠", hasValue: true },
+  { value: "like", label: "LIKE", hasValue: true },
+  { value: "not_like", label: "NOT LIKE", hasValue: true },
+  { value: "lt", label: "<", hasValue: true },
+  { value: "le", label: "≤", hasValue: true },
+  { value: "gt", label: ">", hasValue: true },
+  { value: "ge", label: "≥", hasValue: true },
+  { value: "is_null", label: "IS NULL", hasValue: false },
+  { value: "is_not_null", label: "IS NOT NULL", hasValue: false },
+];
+
+function FilterBar({
+  columns,
+  drafts,
+  setDrafts,
+  match,
+  setMatch,
+  onApply,
+  onClearAll,
+  appliedCount,
+}: {
+  columns: string[];
+  drafts: FilterDraft[];
+  setDrafts: React.Dispatch<React.SetStateAction<FilterDraft[]>>;
+  match: FilterMatch;
+  setMatch: (m: FilterMatch) => void;
+  onApply: () => void;
+  onClearAll: () => void;
+  appliedCount: number;
+}) {
+  function updateDraft(id: string, patch: Partial<FilterDraft>) {
+    setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
+  }
+  function addDraft() {
+    setDrafts((prev) => [
+      ...prev,
+      {
+        id: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+        column: columns[0] ?? "",
+        op: "like",
+        value: "",
+      },
+    ]);
+  }
+  function removeDraft(id: string) {
+    setDrafts((prev) => prev.filter((d) => d.id !== id));
+  }
+  return (
+    <div className="flex flex-col gap-2 border-b border-border bg-sidebar-accent/20 px-4 py-2 text-xs">
+      {drafts.length === 0 ? (
+        <div className="flex items-center gap-2">
+          <span className="text-muted-foreground">No filters.</span>
+          <button
+            type="button"
+            onClick={addDraft}
+            className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:border-accent hover:text-accent"
+          >
+            + Filter
+          </button>
+        </div>
+      ) : (
+        <>
+          <div className="flex items-center gap-2">
+            <span className="text-muted-foreground">Match</span>
+            <div className="inline-flex overflow-hidden rounded-md border border-border">
+              <button
+                type="button"
+                onClick={() => setMatch("all")}
+                className={`px-2 py-0.5 text-xs ${
+                  match === "all"
+                    ? "bg-foreground text-background"
+                    : "bg-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                ALL (AND)
+              </button>
+              <button
+                type="button"
+                onClick={() => setMatch("any")}
+                className={`px-2 py-0.5 text-xs ${
+                  match === "any"
+                    ? "bg-foreground text-background"
+                    : "bg-transparent text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                ANY (OR)
+              </button>
+            </div>
+          </div>
+          <ul className="flex flex-col gap-1">
+            {drafts.map((d) => {
+              const op = FILTER_OPS.find((o) => o.value === d.op) ?? FILTER_OPS[0];
+              return (
+                <li key={d.id} className="grid grid-cols-[200px_140px_1fr_auto] items-center gap-2">
+                  <select
+                    value={d.column}
+                    onChange={(e) => updateDraft(d.id, { column: e.currentTarget.value })}
+                    className="h-7 rounded-md border border-border bg-input/50 px-2 outline-none focus:border-accent"
+                  >
+                    {columns.map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                  <select
+                    value={d.op}
+                    onChange={(e) => updateDraft(d.id, { op: e.currentTarget.value as FilterOp })}
+                    className="h-7 rounded-md border border-border bg-input/50 px-2 outline-none focus:border-accent"
+                  >
+                    {FILTER_OPS.map((o) => (
+                      <option key={o.value} value={o.value}>
+                        {o.label}
+                      </option>
+                    ))}
+                  </select>
+                  <input
+                    placeholder={op.hasValue ? "value" : "— no value —"}
+                    value={d.value}
+                    disabled={!op.hasValue}
+                    onChange={(e) => updateDraft(d.id, { value: e.currentTarget.value })}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter") {
+                        e.preventDefault();
+                        onApply();
+                      }
+                    }}
+                    className="h-7 rounded-md border border-border bg-input/50 px-2 outline-none placeholder:text-muted-foreground/60 focus:border-accent disabled:opacity-50"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => removeDraft(d.id)}
+                    className="rounded-md px-2 py-0.5 text-muted-foreground hover:text-destructive"
+                    aria-label="Remove filter"
+                  >
+                    ✕
+                  </button>
+                </li>
+              );
+            })}
+          </ul>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={addDraft}
+              className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:border-accent hover:text-accent"
+            >
+              + Filter
+            </button>
+            <button
+              type="button"
+              onClick={onClearAll}
+              className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:text-destructive"
+            >
+              Clear
+            </button>
+            <span className="ml-auto text-muted-foreground">
+              {appliedCount > 0 ? `${appliedCount} applied` : "unapplied"}
+            </span>
+            <button
+              type="button"
+              onClick={onApply}
+              className="rounded-md border border-accent bg-accent px-2 py-0.5 font-semibold text-accent-foreground hover:opacity-90"
+            >
+              Apply
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function RowContextMenu({
   x,
   y,
@@ -747,9 +1024,10 @@ function NewRowView({
 }) {
   const keyPrefix = String(virtualRow.key);
   return (
-    // biome-ignore lint/a11y/useKeyWithClickEvents: right-click handler
-    // biome-ignore lint/a11y/noStaticElementInteractions: virtualised row container
+    // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
     <div
+      role="row"
+      tabIndex={-1}
       className="absolute top-0 left-0 flex border-b border-accent/40 bg-accent/10 text-sm hover:bg-accent/15"
       style={{
         width: totalWidth,

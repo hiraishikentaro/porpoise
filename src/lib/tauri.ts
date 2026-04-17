@@ -148,12 +148,34 @@ export type TablePage = {
   returned: number;
 };
 
+export type SortKey = {
+  column: string;
+  descending: boolean;
+};
+
+export type Filter =
+  | {
+      column: string;
+      op: "eq" | "ne" | "lt" | "le" | "gt" | "ge" | "like" | "not_like";
+      value: string;
+    }
+  | { column: string; op: "is_null" | "is_not_null" };
+
+export type FilterMatch = "all" | "any";
+
+export type SelectTableOptions = {
+  sort?: SortKey[];
+  filters?: Filter[];
+  filterMatch?: FilterMatch;
+};
+
 export function selectTableRows(
   connectionId: string,
   database: string,
   table: string,
   offset: number,
   limit: number,
+  opts: SelectTableOptions = {},
 ): Promise<TablePage> {
   return invoke<TablePage>("select_table_rows", {
     connectionId,
@@ -161,6 +183,9 @@ export function selectTableRows(
     table,
     offset,
     limit,
+    sort: opts.sort ?? null,
+    filters: opts.filters ?? null,
+    filterMatch: opts.filterMatch ?? null,
   });
 }
 

@@ -157,7 +157,45 @@ pub struct TablePage {
     pub returned: u64,
 }
 
+#[derive(Debug, serde::Deserialize)]
+pub struct SortKey {
+    pub column: String,
+    #[serde(default)]
+    pub descending: bool,
+}
+
+#[derive(Debug, serde::Deserialize)]
+#[serde(tag = "op", rename_all = "snake_case")]
+pub enum FilterOp {
+    Eq { value: String },
+    Ne { value: String },
+    Lt { value: String },
+    Le { value: String },
+    Gt { value: String },
+    Ge { value: String },
+    Like { value: String },
+    NotLike { value: String },
+    IsNull,
+    IsNotNull,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct Filter {
+    pub column: String,
+    #[serde(flatten)]
+    pub op: FilterOp,
+}
+
+#[derive(Debug, Default, serde::Deserialize, Clone, Copy)]
+#[serde(rename_all = "snake_case")]
+pub enum FilterMatch {
+    #[default]
+    All,
+    Any,
+}
+
 #[tauri::command]
+#[allow(clippy::too_many_arguments)]
 pub async fn select_table_rows(
     state: State<'_, AppState>,
     connection_id: Uuid,
@@ -165,18 +203,100 @@ pub async fn select_table_rows(
     table: String,
     offset: u64,
     limit: u32,
+    sort: Option<Vec<SortKey>>,
+    filters: Option<Vec<Filter>>,
+    filter_match: Option<FilterMatch>,
 ) -> AppResult<TablePage> {
     let pool = pool_of(&state, connection_id)?;
+
+    let mut where_parts: Vec<String> = Vec::new();
+    let mut params: Vec<mysql_async::Value> = Vec::new();
+    if let Some(filters) = filters.as_ref() {
+        for f in filters {
+            let col = quote_ident(&f.column);
+            match &f.op {
+                FilterOp::Eq { value } => {
+                    where_parts.push(format!("{col} = ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::Ne { value } => {
+                    where_parts.push(format!("{col} <> ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::Lt { value } => {
+                    where_parts.push(format!("{col} < ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::Le { value } => {
+                    where_parts.push(format!("{col} <= ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::Gt { value } => {
+                    where_parts.push(format!("{col} > ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::Ge { value } => {
+                    where_parts.push(format!("{col} >= ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::Like { value } => {
+                    where_parts.push(format!("{col} LIKE ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::NotLike { value } => {
+                    where_parts.push(format!("{col} NOT LIKE ?"));
+                    params.push(mysql_async::Value::Bytes(value.clone().into_bytes()));
+                }
+                FilterOp::IsNull => {
+                    where_parts.push(format!("{col} IS NULL"));
+                }
+                FilterOp::IsNotNull => {
+                    where_parts.push(format!("{col} IS NOT NULL"));
+                }
+            }
+        }
+    }
+
+    let conjunction = match filter_match.unwrap_or_default() {
+        FilterMatch::All => " AND ",
+        FilterMatch::Any => " OR ",
+    };
+    let where_sql = if where_parts.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", where_parts.join(conjunction))
+    };
+
+    let order_sql = match sort.as_ref() {
+        Some(keys) if !keys.is_empty() => {
+            let parts: Vec<String> = keys
+                .iter()
+                .map(|k| {
+                    format!(
+                        "{} {}",
+                        quote_ident(&k.column),
+                        if k.descending { "DESC" } else { "ASC" }
+                    )
+                })
+                .collect();
+            format!(" ORDER BY {}", parts.join(", "))
+        }
+        _ => String::new(),
+    };
+
     let sql = format!(
-        "SELECT * FROM {}.{} LIMIT {} OFFSET {}",
+        "SELECT * FROM {}.{}{}{} LIMIT {} OFFSET {}",
         quote_ident(&database),
         quote_ident(&table),
+        where_sql,
+        order_sql,
         limit,
         offset,
     );
 
     let mut conn = pool.get_conn().await?;
-    let result = conn.query_iter(sql).await?;
+    // text/binary protocol の戻り型を揃えるため、常に exec_iter を使う (params 空でも OK)
+    let result = conn.exec_iter(sql, params).await?;
 
     let columns: Vec<String> = result
         .columns()
