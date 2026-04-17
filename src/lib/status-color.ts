@@ -2,18 +2,60 @@ export type StatusColor = "gray" | "blue" | "amber" | "green" | "red" | "pink";
 
 export const STATUS_COLORS: StatusColor[] = ["gray", "blue", "amber", "green", "red", "pink"];
 
-const palette: Record<StatusColor, { bg: string; fg: string }> = {
-  gray: { bg: "oklch(0.45 0.01 270)", fg: "oklch(0.95 0.005 90)" },
-  blue: { bg: "oklch(0.52 0.18 255)", fg: "oklch(0.97 0.005 90)" },
-  amber: { bg: "oklch(0.72 0.15 70)", fg: "oklch(0.2 0.008 270)" },
-  green: { bg: "oklch(0.6 0.17 145)", fg: "oklch(0.97 0.005 90)" },
-  red: { bg: "oklch(0.62 0.21 25)", fg: "oklch(0.97 0.005 90)" },
-  pink: { bg: "oklch(0.7 0.2 340)", fg: "oklch(0.2 0.008 270)" },
+/**
+ * Avatar palette: each entry is a two-stop gradient top → bottom plus a
+ * contrasting foreground. Gradients read as "inked lozenge" rather than flat
+ * circles, which is the one detail you notice at 20 px.
+ */
+const palette: Record<StatusColor, { from: string; to: string; fg: string; ring: string }> = {
+  gray: {
+    from: "oklch(0.55 0.02 250)",
+    to: "oklch(0.38 0.015 250)",
+    fg: "oklch(0.97 0.005 90)",
+    ring: "oklch(0.55 0.02 250)",
+  },
+  blue: {
+    from: "oklch(0.62 0.18 252)",
+    to: "oklch(0.44 0.17 256)",
+    fg: "oklch(0.98 0.005 90)",
+    ring: "oklch(0.62 0.18 252)",
+  },
+  amber: {
+    from: "oklch(0.84 0.16 74)",
+    to: "oklch(0.66 0.15 62)",
+    fg: "oklch(0.2 0.01 60)",
+    ring: "oklch(0.78 0.16 68)",
+  },
+  green: {
+    from: "oklch(0.74 0.16 148)",
+    to: "oklch(0.54 0.15 152)",
+    fg: "oklch(0.98 0.005 90)",
+    ring: "oklch(0.7 0.16 148)",
+  },
+  red: {
+    from: "oklch(0.7 0.22 22)",
+    to: "oklch(0.52 0.2 18)",
+    fg: "oklch(0.98 0.005 90)",
+    ring: "oklch(0.64 0.22 22)",
+  },
+  pink: {
+    from: "oklch(0.76 0.2 340)",
+    to: "oklch(0.58 0.2 342)",
+    fg: "oklch(0.2 0.01 340)",
+    ring: "oklch(0.7 0.2 340)",
+  },
 };
 
 export function statusColorVars(color: StatusColor): React.CSSProperties {
   const p = palette[color];
-  return { backgroundColor: p.bg, color: p.fg };
+  return {
+    backgroundImage: `linear-gradient(160deg, ${p.from} 0%, ${p.to} 100%)`,
+    color: p.fg,
+  };
+}
+
+export function ringColorFor(color: StatusColor): string {
+  return palette[color].ring;
 }
 
 /**

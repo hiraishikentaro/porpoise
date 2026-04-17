@@ -96,18 +96,20 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
     >
       {/* Databases */}
       <aside
-        className={`flex min-h-0 flex-col border-r border-border transition-[width] ${
+        className={`flex min-h-0 flex-col border-r border-border bg-sidebar/20 transition-[width] ${
           dbsCollapsed ? "w-0 overflow-hidden border-r-0" : ""
         }`}
       >
-        <header className="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-          <span>Databases</span>
+        <header className="flex h-9 items-center justify-between px-3">
+          <span className="tp-section-title">Databases</span>
           <div className="flex items-center gap-2">
-            <span className="font-normal text-muted-foreground/60">{databases.length}</span>
+            <span className="tp-num text-[0.65rem] text-muted-foreground/60">
+              {databases.length}
+            </span>
             <button
               type="button"
               onClick={() => setDbsCollapsed(true)}
-              className="text-muted-foreground/70 hover:text-foreground"
+              className="text-muted-foreground/60 transition-colors hover:text-foreground"
               aria-label="Collapse databases panel"
               title="Collapse"
             >
@@ -115,7 +117,8 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
             </button>
           </div>
         </header>
-        <ul className="flex-1 overflow-y-auto">
+        <div className="tp-hair" />
+        <ul className="flex-1 overflow-y-auto py-1">
           {loading === "dbs" && (
             <li className="px-3 py-1.5 text-xs text-muted-foreground">Loading…</li>
           )}
@@ -124,9 +127,9 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
               <button
                 type="button"
                 onClick={() => setSelectedDb(db)}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+                className={`relative flex w-full items-center gap-2 px-3 py-1.5 text-left text-[0.82rem] transition-colors ${
                   selectedDb === db
-                    ? "bg-accent/15 text-accent"
+                    ? "bg-accent/12 text-accent shadow-[inset_2px_0_0_var(--accent)]"
                     : "text-foreground hover:bg-sidebar-accent/40"
                 }`}
               >
@@ -142,25 +145,25 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
       </aside>
 
       {/* Tables */}
-      <aside className="flex min-h-0 flex-col border-r border-border">
-        <header className="flex flex-col gap-2 px-3 py-2">
-          <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+      <aside className="flex min-h-0 flex-col border-r border-border bg-sidebar/10">
+        <header className="flex flex-col gap-2 px-3 pt-2 pb-2">
+          <div className="flex items-center justify-between">
             <div className="flex items-center gap-1.5">
               {dbsCollapsed && (
                 <button
                   type="button"
                   onClick={() => setDbsCollapsed(false)}
-                  className="text-muted-foreground/70 hover:text-foreground"
+                  className="text-muted-foreground/60 transition-colors hover:text-foreground"
                   aria-label="Expand databases panel"
                   title="Show databases"
                 >
                   <ChevronRight />
                 </button>
               )}
-              <span>Tables</span>
+              <span className="tp-section-title">Tables</span>
               {dbsCollapsed && selectedDb && (
                 <span
-                  className="truncate text-[0.65rem] font-normal normal-case text-muted-foreground/60"
+                  className="truncate font-mono text-[0.62rem] text-muted-foreground/60"
                   title={selectedDb}
                 >
                   · {selectedDb}
@@ -171,31 +174,48 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
               <button
                 type="button"
                 onClick={() => onNewQuery(connection, selectedDb)}
-                className="rounded-sm border border-accent/50 bg-accent/10 px-1.5 py-0.5 text-[0.6rem] font-semibold tracking-wide uppercase text-accent hover:bg-accent hover:text-accent-foreground"
+                className="inline-flex items-center gap-1 rounded-sm border border-accent/50 bg-accent/10 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.08em] text-accent transition-colors hover:bg-accent hover:text-accent-foreground"
                 title="Open new SQL editor"
+                style={{ fontFamily: "var(--font-mono)" }}
               >
-                + SQL
+                <span aria-hidden>+</span> SQL
               </button>
-              <span className="font-normal text-muted-foreground/60">{filteredTables.length}</span>
+              <span className="tp-num text-[0.65rem] text-muted-foreground/60">
+                {filteredTables.length}
+              </span>
             </div>
           </div>
-          <input
-            placeholder="Filter…"
-            value={tableFilter}
-            onChange={(e) => setTableFilter(e.currentTarget.value)}
-            className="h-7 w-full rounded-md border border-border bg-input/50 px-2 text-xs outline-none placeholder:text-muted-foreground/60 focus:border-accent"
-          />
+          <div className="group flex h-7 items-center gap-1.5 rounded-md border border-border bg-input/40 px-2 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_2px_var(--accent-glow)]">
+            <svg
+              viewBox="0 0 16 16"
+              className="h-3 w-3 text-muted-foreground/60"
+              role="img"
+              aria-label="filter tables"
+              fill="none"
+            >
+              <title>filter</title>
+              <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="m11 11 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              placeholder="Filter"
+              value={tableFilter}
+              onChange={(e) => setTableFilter(e.currentTarget.value)}
+              className="h-full flex-1 bg-transparent text-xs outline-none placeholder:text-muted-foreground/60"
+            />
+          </div>
         </header>
-        <ul className="flex-1 overflow-y-auto">
+        <div className="tp-hair" />
+        <ul className="flex-1 overflow-y-auto py-1">
           {loading === "tables" && (
             <li className="px-3 py-1.5 text-xs text-muted-foreground">Loading…</li>
           )}
           {filteredTables.map((t) => (
             <li key={t.name}>
               <div
-                className={`group flex w-full items-center gap-2 px-3 py-1.5 text-sm ${
+                className={`group relative flex w-full items-center gap-2 px-3 py-1.5 text-[0.82rem] transition-colors ${
                   selectedTable === t.name
-                    ? "bg-accent/15 text-accent"
+                    ? "bg-accent/12 text-accent shadow-[inset_2px_0_0_var(--accent)]"
                     : "text-foreground hover:bg-sidebar-accent/40"
                 }`}
               >
@@ -210,18 +230,14 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
                 >
                   {t.kind === "view" ? <ViewIcon /> : <TableIcon />}
                   <span className="truncate">{t.name}</span>
-                  {t.kind === "view" && (
-                    <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">
-                      view
-                    </span>
-                  )}
+                  {t.kind === "view" && <span className="tp-chip-ghost">view</span>}
                 </button>
                 <button
                   type="button"
                   onClick={() => {
                     if (selectedDb) onOpenTable(connection, selectedDb, t.name);
                   }}
-                  className="text-muted-foreground/50 opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+                  className="text-muted-foreground/40 opacity-0 transition-all hover:text-accent group-hover:opacity-100"
                   aria-label="Open in new tab"
                   title="Open in new tab"
                 >

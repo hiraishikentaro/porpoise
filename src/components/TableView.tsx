@@ -446,37 +446,46 @@ export function TableView({ connectionId, database, table, columns }: Props) {
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
-      <header className="flex items-center justify-between border-b border-border px-4 py-1.5 text-xs">
-        <span className="text-muted-foreground">
-          {state.rows.length} row{state.rows.length === 1 ? "" : "s"}
-          {state.reachedEnd ? "" : "+"}
-          {appliedFilters.length > 0 && <span className="ml-2 text-accent">· filtered</span>}
-          {!editable && columns.length > 0 && (
-            <span className="ml-2 text-muted-foreground/70">· read-only (no primary key)</span>
+      <header className="flex h-9 items-center justify-between border-b border-border bg-sidebar/25 px-4 text-xs">
+        <span className="flex items-center gap-2 text-muted-foreground">
+          <span className="tp-num text-foreground/90">
+            {state.rows.length.toLocaleString()}
+            {state.reachedEnd ? "" : "+"}
+          </span>
+          <span className="text-muted-foreground/70">row{state.rows.length === 1 ? "" : "s"}</span>
+          {appliedFilters.length > 0 && <span className="tp-chip-accent">filtered</span>}
+          {!editable && columns.length > 0 && <span className="tp-chip-ghost">read-only</span>}
+          {state.loading && (
+            <span className="inline-flex items-center gap-1.5 text-muted-foreground/80">
+              <span
+                aria-hidden
+                className="inline-block h-1 w-1 animate-pulse rounded-full bg-accent"
+              />
+              loading
+            </span>
           )}
         </span>
-        <div className="flex items-center gap-2">
-          {state.loading && <span className="text-muted-foreground">Loading…</span>}
+        <div className="flex items-center gap-1.5">
           <button
             type="button"
             onClick={() => setFiltersOpen((v) => !v)}
-            className={`rounded-md border px-2 py-0.5 text-xs ${
+            className={`inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[0.7rem] transition-colors ${
               filtersOpen || appliedFilters.length > 0
-                ? "border-accent text-accent"
-                : "border-border text-muted-foreground hover:border-accent hover:text-accent"
+                ? "border-accent/60 bg-accent/10 text-accent"
+                : "border-border text-muted-foreground hover:border-accent/60 hover:text-accent"
             }`}
             title="Toggle filter bar"
           >
-            Filter{appliedFilters.length > 0 ? ` (${appliedFilters.length})` : ""}
+            Filter{appliedFilters.length > 0 ? ` · ${appliedFilters.length}` : ""}
           </button>
           {editable && (
             <button
               type="button"
               onClick={addNewRow}
-              className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
+              className="inline-flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.7rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent"
               title="Add a new row"
             >
-              + Row
+              <span aria-hidden>+</span> Row
             </button>
           )}
           {totalChanges > 0 && (
@@ -484,16 +493,16 @@ export function TableView({ connectionId, database, table, columns }: Props) {
               <button
                 type="button"
                 onClick={handleDiscard}
-                className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:text-foreground"
+                className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.7rem] text-muted-foreground transition-colors hover:text-foreground"
               >
                 Discard
               </button>
               <button
                 type="button"
                 onClick={() => setShowCommit(true)}
-                className="rounded-md border border-accent bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground hover:opacity-90"
+                className="tp-btn tp-btn-primary h-6 px-2.5 text-[0.7rem]"
               >
-                Commit {totalChanges} change{totalChanges === 1 ? "" : "s"}
+                Commit <span className="tp-num">{totalChanges}</span>
               </button>
             </>
           )}
@@ -526,7 +535,7 @@ export function TableView({ connectionId, database, table, columns }: Props) {
       >
         <div style={{ width: totalWidth, position: "relative" }}>
           <div
-            className="sticky top-0 z-10 flex border-b border-border bg-background/95 text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground backdrop-blur"
+            className="sticky top-0 z-10 flex border-b border-border bg-sidebar/85 text-[0.66rem] font-semibold uppercase tracking-[0.1em] text-muted-foreground backdrop-blur"
             style={{ width: totalWidth }}
           >
             {state.columnNames.map((col, i) => {
@@ -538,19 +547,31 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                   key={col}
                   style={{ width: colWidths[i] }}
                   onClick={() => cycleSort(col)}
-                  className="flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border/60 px-3 py-2 text-left hover:bg-sidebar-accent/40"
+                  className={`relative flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border/60 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
+                    sort ? "text-accent" : ""
+                  }`}
                   title="Click to sort"
                 >
                   {pk && (
-                    <span className="rounded-sm bg-accent/15 px-1 text-[0.55rem] font-semibold tracking-wide text-accent">
+                    <span
+                      className="rounded-sm bg-accent/15 px-1 text-[0.55rem] font-semibold tracking-wider text-accent"
+                      style={{ fontFamily: "var(--font-mono)" }}
+                    >
                       PK
                     </span>
                   )}
                   <span className="truncate">{col}</span>
                   {sort && (
-                    <span aria-hidden className="ml-auto text-[0.7rem] text-accent">
+                    <span aria-hidden className="ml-auto text-[0.65rem] text-accent">
                       {sort.descending ? "▼" : "▲"}
                     </span>
+                  )}
+                  {sort && (
+                    <span
+                      aria-hidden
+                      className="absolute inset-x-0 bottom-0 h-[1.5px]"
+                      style={{ backgroundColor: "var(--accent)" }}
+                    />
                   )}
                 </button>
               );
@@ -1459,18 +1480,18 @@ function LongFieldEditorModal({
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
-      <div className="flex h-[70vh] w-full max-w-4xl flex-col overflow-hidden rounded-md border border-border bg-card shadow-xl">
-        <header className="flex items-baseline justify-between border-b border-border px-5 py-3">
-          <div className="flex flex-col">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-6 backdrop-blur-sm">
+      <div className="flex h-[70vh] w-full max-w-4xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-[0_20px_60px_-20px_oklch(0_0_0/80%),0_0_0_1px_oklch(1_0_0/4%)_inset]">
+        <header className="flex items-baseline justify-between border-b border-border bg-sidebar/30 px-5 py-3">
+          <div className="flex flex-col leading-tight">
+            <span className="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground/80">
               {kind === "json" ? "JSON" : "Text"}
             </span>
-            <h2 className="text-base font-semibold">
+            <h2 className="font-display text-[1.02rem] font-medium tracking-tight">
               {columnName}{" "}
-              <span className="text-xs font-normal text-muted-foreground">
+              <span className="font-mono text-[0.72rem] font-normal text-chart-3">
                 {column.data_type}
-                {column.nullable ? "" : " · NOT NULL"}
+                {column.nullable ? "" : <span className="text-muted-foreground"> · NOT NULL</span>}
               </span>
             </h2>
           </div>

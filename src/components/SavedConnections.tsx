@@ -66,6 +66,11 @@ export function SavedConnections({
     });
   }, [items, query]);
 
+  const liveCount = useMemo(
+    () => items.filter((c) => activeIds.has(c.id)).length,
+    [items, activeIds],
+  );
+
   async function handleDelete(id: string) {
     try {
       await deleteConnection(id);
@@ -104,17 +109,45 @@ export function SavedConnections({
 
   return (
     <div className="flex h-full flex-col">
-      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
-        <div className="flex h-9 flex-1 items-center gap-2 rounded-md border border-border bg-input/50 px-3">
+      <div className="px-3 pt-3 pb-2">
+        <div className="group flex h-9 items-center gap-2 rounded-md border border-sidebar-border bg-input/40 px-3 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_3px_var(--accent-glow)]">
           <SearchIcon />
           <input
-            placeholder="Search connections…"
+            placeholder="Search connections"
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
-            className="h-full flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+            className="h-full flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/60"
           />
-          <span className="hidden text-[0.7rem] text-muted-foreground/50 sm:inline">⌘F</span>
+          {query ? (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="text-muted-foreground/50 hover:text-foreground"
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          ) : (
+            <span className="tp-kbd">⌘F</span>
+          )}
         </div>
+      </div>
+
+      <div className="flex items-center justify-between px-4 pt-1 pb-2">
+        <span className="tp-section-title">Connections</span>
+        <span className="flex items-center gap-1.5 text-[0.65rem] text-muted-foreground/70">
+          {liveCount > 0 && (
+            <>
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_1px_var(--accent-glow)]"
+              />
+              <span className="tp-num">{liveCount}</span>
+              <span className="text-muted-foreground/50">live ·</span>
+            </>
+          )}
+          <span className="tp-num">{items.length}</span>
+        </span>
       </div>
 
       {error && (
@@ -126,9 +159,16 @@ export function SavedConnections({
       <div className="flex-1 overflow-y-auto px-2 pb-3">
         {loading && <p className="px-3 py-2 text-xs text-muted-foreground">Loading…</p>}
         {!loading && filtered.length === 0 && (
-          <p className="px-3 py-2 text-xs text-muted-foreground">
-            {items.length === 0 ? "No saved connections yet." : "No match."}
-          </p>
+          <div className="px-3 py-6 text-center">
+            <p className="text-xs text-muted-foreground">
+              {items.length === 0 ? "No saved connections yet." : "No match."}
+            </p>
+            {items.length === 0 && (
+              <p className="mt-2 text-[0.65rem] text-muted-foreground/60">
+                Hit <span className="tp-kbd">+</span> above to add one.
+              </p>
+            )}
+          </div>
         )}
         <ul className="flex flex-col gap-0.5">
           {filtered.map((conn) => {
@@ -145,34 +185,37 @@ export function SavedConnections({
                   type="button"
                   onClick={() => onSelect(conn)}
                   className={`group relative flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors ${
-                    selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60"
+                    selected
+                      ? "bg-sidebar-accent/90 shadow-[inset_1px_0_0_var(--accent)]"
+                      : "hover:bg-sidebar-accent/50"
                   }`}
                 >
                   <Avatar label={initialsOf(conn.name)} color={color} active={open} />
                   <div className="flex min-w-0 flex-1 flex-col">
                     <div className="flex items-center gap-1.5">
-                      <span className="truncate text-sm font-medium">{conn.name}</span>
+                      <span className="truncate text-sm font-medium tracking-tight">
+                        {conn.name}
+                      </span>
                       {local && (
                         <span
-                          className="text-xs font-normal"
-                          style={{ color: "oklch(0.72 0.15 145)" }}
+                          className="text-[0.64rem] font-normal tracking-wide"
+                          style={{ color: "oklch(0.78 0.14 148)" }}
                         >
-                          (local)
+                          local
                         </span>
                       )}
                       {conn.ssh && (
-                        <span
-                          className="rounded-sm bg-accent/15 px-1 text-[0.65rem] font-semibold tracking-wide uppercase text-accent"
-                          title="via SSH tunnel"
-                        >
+                        <span className="tp-chip-accent" title="via SSH tunnel">
                           ssh
                         </span>
                       )}
                     </div>
-                    <span className="truncate text-xs text-muted-foreground">
+                    <span className="truncate font-mono text-[0.68rem] text-muted-foreground/80">
                       {conn.host}
                       {conn.port !== 3306 && `:${conn.port}`}
-                      {conn.database && ` / ${conn.database}`}
+                      {conn.database && (
+                        <span className="text-muted-foreground/50"> / {conn.database}</span>
+                      )}
                     </span>
                   </div>
                   <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
@@ -184,7 +227,7 @@ export function SavedConnections({
                           handleClose(conn.id);
                         }}
                         disabled={isClosing}
-                        className="rounded-md border border-accent/60 px-2 py-0.5 text-xs text-accent hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                        className="rounded-md border border-accent/50 bg-accent/10 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-accent transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
                       >
                         {isClosing ? "…" : "Close"}
                       </button>
@@ -196,7 +239,7 @@ export function SavedConnections({
                           handleOpen(conn);
                         }}
                         disabled={isOpening}
-                        className="rounded-md border border-border px-2 py-0.5 text-xs text-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+                        className="rounded-md border border-border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-foreground transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
                       >
                         {isOpening ? "…" : "Open"}
                       </button>
@@ -207,7 +250,7 @@ export function SavedConnections({
                         e.stopPropagation();
                         handleDelete(conn.id);
                       }}
-                      className="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive"
+                      className="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground transition-colors hover:text-destructive"
                       aria-label={`Delete ${conn.name}`}
                     >
                       ✕
@@ -233,13 +276,22 @@ function Avatar({
   active: boolean;
 }) {
   return (
-    <span
-      className={`relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold tracking-wide transition-shadow ${
-        active ? "ring-2 ring-accent ring-offset-2 ring-offset-sidebar" : ""
-      }`}
-      style={statusColorVars(color)}
-    >
-      {label}
+    <span className="relative inline-flex h-9 w-9 shrink-0 items-center justify-center">
+      <span
+        className={`relative inline-flex h-9 w-9 items-center justify-center rounded-full text-[0.68rem] font-semibold tracking-wide transition-shadow ${
+          active ? "tp-live" : "shadow-[0_1px_0_oklch(0_0_0/30%),inset_0_1px_0_oklch(1_0_0/15%)]"
+        }`}
+        style={statusColorVars(color)}
+      >
+        {label}
+      </span>
+      {active && (
+        <span
+          aria-hidden
+          className="absolute -right-0.5 -bottom-0.5 h-2.5 w-2.5 rounded-full border-2 border-sidebar"
+          style={{ backgroundColor: "oklch(0.74 0.18 148)" }}
+        />
+      )}
     </span>
   );
 }
@@ -248,7 +300,7 @@ function SearchIcon() {
   return (
     <svg
       viewBox="0 0 16 16"
-      className="h-3.5 w-3.5 text-muted-foreground"
+      className="h-3.5 w-3.5 text-muted-foreground/70"
       role="img"
       aria-label="search"
       fill="none"

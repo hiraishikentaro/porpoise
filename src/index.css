@@ -2,11 +2,15 @@
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
 @import "@fontsource-variable/geist";
+@import "@fontsource-variable/jetbrains-mono";
+@import "@fontsource-variable/fraunces";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
   --font-sans: "Geist Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-display: "Fraunces Variable", "Geist Variable", serif;
   --font-heading: var(--font-sans);
 
   --color-sidebar-ring: var(--sidebar-ring);
@@ -46,47 +50,64 @@
   --radius-xl: calc(var(--radius) + 4px);
 }
 
-/* Dark-first TablePlus-like palette */
+/*
+ * "Ink & Phosphor" — a dark ink base with a hint of teal,
+ * phosphor amber primary + cyan highlight, warm data tokens.
+ */
 :root {
-  --background: oklch(0.22 0.004 270);
-  --foreground: oklch(0.95 0.005 90);
-  --card: oklch(0.26 0.005 270);
-  --card-foreground: oklch(0.95 0.005 90);
-  --popover: oklch(0.26 0.005 270);
+  /* Core surfaces — pulled toward cool ink (hue 240) instead of generic navy */
+  --background: oklch(0.18 0.012 245);
+  --foreground: oklch(0.94 0.006 95);
+  --card: oklch(0.22 0.013 245);
+  --card-foreground: oklch(0.94 0.006 95);
+  --popover: oklch(0.24 0.014 245);
   --popover-foreground: oklch(0.95 0.005 90);
-  --primary: oklch(0.95 0.005 90);
-  --primary-foreground: oklch(0.22 0.004 270);
-  --secondary: oklch(0.3 0.005 270);
-  --secondary-foreground: oklch(0.95 0.005 90);
-  --muted: oklch(0.3 0.005 270);
-  --muted-foreground: oklch(0.62 0.008 270);
-  --accent: oklch(0.72 0.15 55);
-  --accent-foreground: oklch(0.16 0.008 270);
-  --destructive: oklch(0.62 0.21 25);
-  --border: oklch(1 0 0 / 9%);
-  --input: oklch(0.3 0.012 150 / 70%);
-  --ring: oklch(0.72 0.15 55);
-  --chart-1: oklch(0.72 0.15 55);
-  --chart-2: oklch(0.7 0.16 145);
-  --chart-3: oklch(0.65 0.15 250);
-  --chart-4: oklch(0.72 0.15 15);
-  --chart-5: oklch(0.68 0.12 85);
-  --radius: 0.5rem;
-  --sidebar: oklch(0.2 0.004 270);
-  --sidebar-foreground: oklch(0.92 0.006 90);
-  --sidebar-primary: oklch(0.72 0.15 55);
-  --sidebar-primary-foreground: oklch(0.16 0.008 270);
-  --sidebar-accent: oklch(0.28 0.006 270);
-  --sidebar-accent-foreground: oklch(0.95 0.005 90);
-  --sidebar-border: oklch(1 0 0 / 8%);
-  --sidebar-ring: oklch(0.72 0.15 55);
 
-  /* Status label palette — TablePlus uses these 6 */
-  --status-gray: oklch(0.6 0.01 270);
-  --status-blue: oklch(0.55 0.18 255);
-  --status-amber: oklch(0.72 0.15 70);
-  --status-green: oklch(0.7 0.16 145);
-  --status-red: oklch(0.62 0.21 25);
+  --primary: oklch(0.95 0.005 90);
+  --primary-foreground: oklch(0.18 0.012 245);
+  --secondary: oklch(0.26 0.014 245);
+  --secondary-foreground: oklch(0.94 0.006 95);
+  --muted: oklch(0.25 0.014 245);
+  --muted-foreground: oklch(0.62 0.018 235);
+
+  /* Phosphor amber — warmer, slightly more chromatic than before */
+  --accent: oklch(0.78 0.165 68);
+  --accent-foreground: oklch(0.16 0.008 245);
+  --accent-glow: oklch(0.78 0.165 68 / 0.22);
+
+  /* Cyan highlight used for secondary/hover hairlines and data numerics */
+  --cyan: oklch(0.78 0.12 210);
+  --cyan-soft: oklch(0.78 0.12 210 / 0.18);
+
+  --destructive: oklch(0.64 0.22 22);
+  --border: oklch(1 0 0 / 7%);
+  --input: oklch(0.28 0.014 245 / 70%);
+  --ring: oklch(0.78 0.165 68 / 0.75);
+
+  --chart-1: oklch(0.78 0.165 68);
+  --chart-2: oklch(0.74 0.15 148);
+  --chart-3: oklch(0.72 0.14 250);
+  --chart-4: oklch(0.74 0.2 18);
+  --chart-5: oklch(0.7 0.12 90);
+
+  --radius: 0.5rem;
+
+  /* Sidebar — one shade deeper than the canvas, for visual weight */
+  --sidebar: oklch(0.15 0.012 245);
+  --sidebar-foreground: oklch(0.92 0.007 95);
+  --sidebar-primary: oklch(0.78 0.165 68);
+  --sidebar-primary-foreground: oklch(0.16 0.008 245);
+  --sidebar-accent: oklch(0.26 0.016 245);
+  --sidebar-accent-foreground: oklch(0.95 0.005 90);
+  --sidebar-border: oklch(1 0 0 / 6%);
+  --sidebar-ring: oklch(0.78 0.165 68 / 0.7);
+
+  /* Status label palette — slightly richer than before */
+  --status-gray: oklch(0.6 0.01 250);
+  --status-blue: oklch(0.56 0.18 250);
+  --status-amber: oklch(0.74 0.16 68);
+  --status-green: oklch(0.7 0.16 148);
+  --status-red: oklch(0.64 0.22 22);
   --status-pink: oklch(0.7 0.2 340);
 }
 
@@ -100,50 +121,167 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    font-feature-settings: "ss01", "cv11";
+    font-feature-settings: "ss01", "cv11", "tnum";
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
+
+    /*
+     * Subtle two-layer atmosphere:
+     *  1. a faint diagonal phosphor-amber glow from top-right
+     *  2. a muted cyan halo from bottom-left
+     * Both are ultra-low alpha so the UI reads as "ink with a hint of light"
+     * rather than gradient noise.
+     */
+    background-image:
+      radial-gradient(circle at 100% 0%, oklch(0.78 0.165 68 / 0.07) 0%, transparent 42%),
+      radial-gradient(circle at 0% 100%, oklch(0.78 0.12 210 / 0.05) 0%, transparent 45%);
+    background-attachment: fixed;
+  }
+  /* Tabular numerals everywhere — data tool convention */
+  input,
+  button,
+  table {
+    font-feature-settings: "tnum", "ss01";
   }
 }
 
 @layer components {
+  /* ---- Inputs ---- */
   .tp-input {
     @apply h-9 w-full rounded-md border border-transparent bg-input px-3 text-sm text-foreground;
     transition:
-      border-color 150ms ease,
-      background-color 150ms ease;
+      border-color 160ms ease,
+      background-color 160ms ease,
+      box-shadow 160ms ease;
   }
   .tp-input::placeholder {
-    color: oklch(0.55 0.04 150);
+    color: oklch(0.55 0.02 240);
     opacity: 0.8;
   }
   .tp-input:hover {
-    border-color: oklch(1 0 0 / 8%);
+    border-color: oklch(1 0 0 / 10%);
   }
   .tp-input:focus {
     outline: none;
-    border-color: var(--ring);
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px var(--accent-glow);
   }
 
   .tp-label {
     @apply flex items-center justify-end text-sm text-muted-foreground;
     min-height: 2.25rem;
+    letter-spacing: 0.01em;
   }
 
+  /* ---- Buttons ---- */
   .tp-btn {
-    @apply inline-flex h-8 items-center justify-center rounded-md border border-border bg-secondary px-3 text-sm text-foreground transition-colors;
+    @apply inline-flex h-8 items-center justify-center gap-1.5 rounded-md border border-border bg-secondary px-3 text-sm text-foreground;
+    transition:
+      border-color 140ms ease,
+      background-color 140ms ease,
+      transform 80ms ease;
   }
   .tp-btn:hover:not(:disabled) {
-    background-color: oklch(0.35 0.005 270);
+    background-color: oklch(0.31 0.014 245);
+    border-color: oklch(1 0 0 / 12%);
+  }
+  .tp-btn:active:not(:disabled) {
+    transform: translateY(0.5px);
   }
   .tp-btn:disabled {
-    opacity: 0.5;
+    opacity: 0.45;
     cursor: not-allowed;
   }
   .tp-btn-primary {
-    @apply border-transparent bg-accent text-accent-foreground;
+    @apply border-transparent text-accent-foreground;
+    background-image: linear-gradient(180deg, oklch(0.82 0.17 70), oklch(0.74 0.16 62));
+    box-shadow:
+      0 1px 0 oklch(1 0 0 / 18%) inset,
+      0 0 0 1px oklch(0.6 0.13 55) inset,
+      0 1px 0 oklch(0 0 0 / 30%);
   }
   .tp-btn-primary:hover:not(:disabled) {
-    background-color: oklch(0.78 0.16 55);
+    background-image: linear-gradient(180deg, oklch(0.85 0.18 72), oklch(0.77 0.16 64));
   }
+
+  /* ---- Pill chips (counts, labels) ---- */
+  .tp-chip {
+    @apply inline-flex items-center rounded-sm px-1.5 py-[1px] text-[0.62rem] font-semibold uppercase tracking-[0.08em];
+    font-family: var(--font-mono);
+    font-variation-settings: "wght" 560;
+  }
+  .tp-chip-accent {
+    @apply inline-flex items-center rounded-sm bg-accent/15 px-1.5 py-[1px] text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-accent;
+    font-family: var(--font-mono);
+    font-variation-settings: "wght" 560;
+  }
+  .tp-chip-ghost {
+    @apply inline-flex items-center rounded-sm border border-border/70 px-1.5 py-[1px] text-[0.62rem] font-semibold uppercase tracking-[0.08em] text-muted-foreground;
+    font-family: var(--font-mono);
+    font-variation-settings: "wght" 560;
+  }
+
+  /* ---- Keyboard hint ---- */
+  .tp-kbd {
+    @apply inline-flex h-[18px] min-w-[18px] items-center justify-center rounded-[4px] border border-border bg-sidebar px-1 text-[10px] font-medium text-muted-foreground/80;
+    font-family: var(--font-mono);
+    box-shadow: 0 1px 0 oklch(0 0 0 / 20%);
+  }
+
+  /* ---- Section header — uppercase, letter-spaced ---- */
+  .tp-section-title {
+    @apply flex items-center gap-2 text-[0.68rem] font-semibold uppercase text-muted-foreground;
+    letter-spacing: 0.12em;
+  }
+
+  /* ---- Monospace numeric tokens ---- */
+  .tp-num {
+    font-family: var(--font-mono);
+    font-variation-settings: "wght" 480;
+    font-feature-settings: "tnum", "ss01";
+  }
+
+  /* ---- Soft divider ---- */
+  .tp-hair {
+    height: 1px;
+    background-image: linear-gradient(
+      90deg,
+      transparent,
+      oklch(1 0 0 / 10%) 20%,
+      oklch(1 0 0 / 10%) 80%,
+      transparent
+    );
+  }
+
+  /* ---- Gradient avatar ring halo used when a connection is "live" ---- */
+  .tp-live {
+    box-shadow:
+      0 0 0 2px var(--sidebar),
+      0 0 0 3.5px var(--accent),
+      0 0 10px 1px var(--accent-glow);
+  }
+
+  /* ---- Subtle scrollbar ---- */
+  ::-webkit-scrollbar {
+    width: 10px;
+    height: 10px;
+  }
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+  ::-webkit-scrollbar-thumb {
+    background-color: oklch(1 0 0 / 8%);
+    border-radius: 999px;
+    border: 2px solid transparent;
+    background-clip: padding-box;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background-color: oklch(1 0 0 / 16%);
+  }
+}
+
+/* ---- Selection ---- */
+::selection {
+  background: oklch(0.78 0.165 68 / 0.28);
+  color: var(--foreground);
 }
