@@ -59,17 +59,34 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # Apple signing: secret が本当に設定されている時だけ env を流す。
+      # 空文字を渡すと tauri-action が import を試みて失敗するため。
+      # cert 未設定時は ad-hoc 署名 (APPLE_SIGNING_IDENTITY=-) で unsigned .app を作る。
+      - name: Configure Apple signing
+        if: runner.os == 'macOS'
+        shell: bash
+        env:
+          CERT: ${{ secrets.APPLE_CERTIFICATE }}
+        run: |
+          if [ -n "$CERT" ]; then
+            echo "Apple signing cert detected — enabling full sign + notarize"
+            {
+              echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
+              echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
+              echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
+              echo "APPLE_ID=${{ secrets.APPLE_ID }}"
+              echo "APPLE_PASSWORD=${{ secrets.APPLE_PASSWORD }}"
+              echo "APPLE_TEAM_ID=${{ secrets.APPLE_TEAM_ID }}"
+            } >> "$GITHUB_ENV"
+          else
+            echo "No Apple signing cert — falling back to ad-hoc signing"
+            echo "APPLE_SIGNING_IDENTITY=-" >> "$GITHUB_ENV"
+          fi
+
       - name: Tauri build (${{ matrix.label }})
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          # 署名は secret が設定されているときだけ有効化。未設定なら unsigned ビルド。
-          APPLE_CERTIFICATE: ${{ secrets.APPLE_CERTIFICATE }}
-          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
-          APPLE_SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_PASSWORD: ${{ secrets.APPLE_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
         with:
           tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.0-{0}', github.sha) }}
           releaseName: "Porpoise ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}"
