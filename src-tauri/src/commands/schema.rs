@@ -348,6 +348,46 @@ pub struct SchemaSnapshot {
     pub tables: std::collections::BTreeMap<String, Vec<String>>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct AllTablesEntry {
+    pub database: String,
+    pub name: String,
+    pub kind: TableKind,
+}
+
+/// Cmd+P パレット用: 接続内の全 DB × 全テーブルを一括取得。
+/// システムスキーマは除外。VIEW も拾う。
+#[tauri::command]
+pub async fn list_all_tables(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+) -> AppResult<Vec<AllTablesEntry>> {
+    let pool = pool_of(&state, connection_id)?;
+    let mut conn = pool.get_conn().await?;
+    let rows: Vec<(String, String, String)> = conn
+        .exec(
+            "SELECT TABLE_SCHEMA, TABLE_NAME, TABLE_TYPE
+             FROM information_schema.TABLES
+             WHERE TABLE_SCHEMA NOT IN ('information_schema', 'performance_schema', 'mysql', 'sys')
+             ORDER BY TABLE_SCHEMA, TABLE_NAME",
+            (),
+        )
+        .await?;
+    conn.disconnect().await.ok();
+    Ok(rows
+        .into_iter()
+        .map(|(db, name, ty)| AllTablesEntry {
+            database: db,
+            name,
+            kind: if ty.eq_ignore_ascii_case("VIEW") {
+                TableKind::View
+            } else {
+                TableKind::Table
+            },
+        })
+        .collect())
+}
+
 #[tauri::command]
 pub async fn schema_snapshot(
     state: State<'_, AppState>,

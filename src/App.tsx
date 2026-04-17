@@ -5,6 +5,7 @@ import { SavedConnections } from "@/components/SavedConnections";
 import { SqlEditor } from "@/components/SqlEditor";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
+import { TablePalette } from "@/components/TablePalette";
 import {
   activeConnections,
   closeConnection,
@@ -129,6 +130,7 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editorSeq, setEditorSeq] = useState(1);
+  const [paletteOpen, setPaletteOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -325,25 +327,68 @@ function App() {
     }
   }
 
-  // Cmd+W (macOS) / Ctrl+W で、デフォルトのウィンドウ閉じる動作を止めて
-  // アクティブタブだけを閉じる。タブが無い時はデフォルト挙動のまま (window 終了)。
+  // グローバルショートカット:
+  //   Cmd+W : アクティブタブを閉じる (デフォルト window close を抑制)
+  //   Cmd+T : 新規 SQL エディタタブ (アクティブタブの接続がある時のみ)
+  //   Cmd+S : サイドバー (接続一覧) の開閉
+  // いずれも capture phase で拾ってメニュー accelerator より先に preventDefault する
   const closeTabRef = useRef<(id: string) => void>(() => {});
   closeTabRef.current = handleCloseTab;
   const activeTabIdRef = useRef<string | null>(activeTabId);
   activeTabIdRef.current = activeTabId;
+  const tabsRef = useRef<Tab[]>(tabs);
+  tabsRef.current = tabs;
+  const openEditorTabRef = useRef(openEditorTab);
+  openEditorTabRef.current = openEditorTab;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
-      if (e.key !== "w" && e.key !== "W") return;
-      if (!(e.metaKey || e.ctrlKey)) return;
-      if (e.shiftKey || e.altKey) return;
-      const id = activeTabIdRef.current;
-      if (!id) return;
-      e.preventDefault();
-      e.stopPropagation();
-      closeTabRef.current(id);
+      if (!(e.metaKey || e.ctrlKey) || e.altKey) return;
+      const key = e.key.toLowerCase();
+
+      if (key === "w" && !e.shiftKey) {
+        const id = activeTabIdRef.current;
+        if (!id) return;
+        e.preventDefault();
+        e.stopPropagation();
+        closeTabRef.current(id);
+        return;
+      }
+
+      if (key === "t" && !e.shiftKey) {
+        const id = activeTabIdRef.current;
+        const activeTab = id ? tabsRef.current.find((t) => t.id === id) : null;
+        if (!activeTab) return;
+        // エディタタブの database を引き継ぐ、無ければ null
+        const db =
+          activeTab.kind === "editor"
+            ? activeTab.database
+            : activeTab.kind === "table"
+              ? activeTab.database
+              : null;
+        e.preventDefault();
+        e.stopPropagation();
+        openEditorTabRef.current(activeTab.connection, db);
+        return;
+      }
+
+      if (key === "s" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setSidebarCollapsed((v) => !v);
+        return;
+      }
+
+      if (key === "p" && !e.shiftKey) {
+        const id = activeTabIdRef.current;
+        const activeTab = id ? tabsRef.current.find((t) => t.id === id) : null;
+        if (!activeTab) return;
+        e.preventDefault();
+        e.stopPropagation();
+        setPaletteOpen(true);
+        return;
+      }
     }
-    // capture phase で拾ってデフォルトのメニュー accelerator (Cmd+W) より先に preventDefault
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
   }, []);
@@ -374,10 +419,7 @@ function App() {
   }
 
   const activeTab = activeTabId ? (tabs.find((t) => t.id === activeTabId) ?? null) : null;
-  const browserConnectionActive =
-    activeTab?.kind === "connection" && activeIds.has(activeTab.connection.id);
-  const tableTabActive = activeTab?.kind === "table" && activeIds.has(activeTab.connection.id);
-  const editorTabActive = activeTab?.kind === "editor" && activeIds.has(activeTab.connection.id);
+  const showEmptyState = !activeTab || !activeIds.has(activeTab.connection.id);
 
   return (
     <main className="flex h-screen overflow-hidden">
@@ -452,32 +494,54 @@ function App() {
           onReorder={reorderTabs}
         />
 
-        <div className="flex min-h-0 flex-1 flex-col">
-          {browserConnectionActive && activeTab?.kind === "connection" ? (
-            <DatabaseBrowser
-              key={activeTab.connection.id}
-              connection={activeTab.connection}
-              onOpenTable={handleOpenTableInTab}
-              onNewQuery={openEditorTab}
-            />
-          ) : tableTabActive && activeTab?.kind === "table" ? (
-            <TableDetail
-              key={activeTab.id}
-              connectionId={activeTab.connection.id}
-              database={activeTab.database}
-              table={activeTab.table}
-            />
-          ) : editorTabActive && activeTab?.kind === "editor" ? (
-            <SqlEditor
-              key={activeTab.id}
-              connectionId={activeTab.connection.id}
-              initialSql={activeTab.sql}
-              initialDatabase={activeTab.database}
-              onChange={(sql) => updateEditorSql(activeTab.id, sql)}
-              onDatabaseChange={(db) => updateEditorDatabase(activeTab.id, db)}
-              onOpenInNewEditor={(sql, db) => openEditorTab(activeTab.connection, db, sql)}
-            />
-          ) : (
+        <div className="relative flex min-h-0 flex-1 flex-col">
+          {/*
+            状態保持のため、接続が open な全てのタブを常時マウントし、
+            アクティブでないタブは hidden で隠すだけにする。
+            これで DatabaseBrowser の selectedDb や TableView の edit/filter、
+            SqlEditor の実行結果などがタブ移動で飛ばなくなる。
+          */}
+          {tabs.map((tab) => {
+            if (!activeIds.has(tab.connection.id)) return null;
+            const isActive = tab.id === activeTabId;
+            const visibilityClass = isActive ? "flex" : "hidden";
+            if (tab.kind === "connection") {
+              return (
+                <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                  <DatabaseBrowser
+                    connection={tab.connection}
+                    onOpenTable={handleOpenTableInTab}
+                    onNewQuery={openEditorTab}
+                  />
+                </div>
+              );
+            }
+            if (tab.kind === "table") {
+              return (
+                <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                  <TableDetail
+                    connectionId={tab.connection.id}
+                    database={tab.database}
+                    table={tab.table}
+                  />
+                </div>
+              );
+            }
+            return (
+              <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                <SqlEditor
+                  connectionId={tab.connection.id}
+                  initialSql={tab.sql}
+                  initialDatabase={tab.database}
+                  onChange={(sql) => updateEditorSql(tab.id, sql)}
+                  onDatabaseChange={(db) => updateEditorDatabase(tab.id, db)}
+                  onOpenInNewEditor={(sql, db) => openEditorTab(tab.connection, db, sql)}
+                />
+              </div>
+            );
+          })}
+
+          {showEmptyState && (
             <div className="relative flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
               {/* Atmospheric backdrop */}
               <div
@@ -498,6 +562,17 @@ function App() {
           )}
         </div>
       </section>
+
+      {paletteOpen && activeTab && (
+        <TablePalette
+          connection={activeTab.connection}
+          onSelect={(database, table) => {
+            upsertTableTab(activeTab.connection, database, table);
+            setPaletteOpen(false);
+          }}
+          onClose={() => setPaletteOpen(false)}
+        />
+      )}
 
       {toast && (
         <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-md border border-accent/40 bg-card/90 px-4 py-2 shadow-[0_10px_30px_-10px_oklch(0_0_0/60%),0_0_0_1px_oklch(1_0_0/3%)_inset] backdrop-blur">

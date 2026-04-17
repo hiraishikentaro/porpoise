@@ -38,7 +38,7 @@ export function TableDetail({ connectionId, database, table, showTabs = true }: 
   }, [connectionId, database, table]);
 
   return (
-    <section className="flex min-h-0 w-full min-w-0 flex-col overflow-hidden">
+    <section className="flex h-full min-h-0 w-full min-w-0 flex-1 flex-col overflow-hidden">
       {showTabs && (
         <header className="flex items-center justify-between border-b border-border bg-sidebar/20 px-4 py-2.5">
           <div className="flex flex-col leading-tight">

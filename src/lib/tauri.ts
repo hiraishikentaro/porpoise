@@ -141,6 +141,16 @@ export function listTables(connectionId: string, database: string): Promise<Tabl
   return invoke<TableInfo[]>("list_tables", { connectionId, database });
 }
 
+export type AllTablesEntry = {
+  database: string;
+  name: string;
+  kind: TableKind;
+};
+
+export function listAllTables(connectionId: string): Promise<AllTablesEntry[]> {
+  return invoke<AllTablesEntry[]>("list_all_tables", { connectionId });
+}
+
 export function describeTable(
   connectionId: string,
   database: string,
