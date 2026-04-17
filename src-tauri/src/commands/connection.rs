@@ -2,10 +2,13 @@ use serde::{Deserialize, Serialize};
 use tauri::State;
 use uuid::Uuid;
 
-use crate::db::mysql_client::{self, ConnectionConfig};
+use crate::db::mysql_client::{
+    self, ConnectionConfig, SshAuthInput, SshConfigInput, SslConfigInput,
+};
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
-use crate::storage::{keychain, local_db};
+use crate::state::{ActiveConnection, AppState};
+use crate::storage::keychain::{self, Slot};
+use crate::storage::local_db::{self, SshAuthKind};
 
 /// フロントから呼ばれる接続テスト。成功時は MySQL の VERSION() を返す。
 #[tauri::command]
@@ -25,7 +28,9 @@ pub struct SaveConnectionInput {
     pub password: String,
     pub database: Option<String>,
     #[serde(default)]
-    pub use_ssl: bool,
+    pub ssl: SslConfigInput,
+    #[serde(default)]
+    pub ssh: Option<SshConfigInput>,
 }
 
 #[tauri::command]
@@ -47,20 +52,41 @@ pub async fn save_connection(
                     .as_deref()
                     .map(str::trim)
                     .filter(|s| !s.is_empty()),
-                use_ssl: input.use_ssl,
+                ssl: input.ssl.to_saved(),
+                ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
             },
         )?
     };
 
-    if let Err(err) = keychain::save_password(saved.id, &input.password) {
-        // ロールバック: メタデータだけ残すと整合性が崩れるので即削除
+    // keyring 書き込みでエラーが出たら rollback (メタデータ削除)
+    if let Err(err) = persist_secrets(saved.id, &input) {
         let conn = state.local_db.lock().expect("local_db mutex poisoned");
         let _ = local_db::delete(&conn, saved.id);
+        let _ = keychain::delete_all(saved.id);
         return Err(err);
     }
 
     tracing::info!(id = %saved.id, name = %saved.name, "saved connection");
     Ok(saved)
+}
+
+fn persist_secrets(id: Uuid, input: &SaveConnectionInput) -> AppResult<()> {
+    keychain::save(id, Slot::DbPassword, &input.password)?;
+    if let Some(ssh) = &input.ssh {
+        match &ssh.auth {
+            SshAuthInput::Password { password } => {
+                keychain::save(id, Slot::SshPassword, password)?;
+            }
+            SshAuthInput::Key { passphrase, .. } => {
+                if let Some(pp) = passphrase.as_deref() {
+                    if !pp.is_empty() {
+                        keychain::save(id, Slot::SshKeyPassphrase, pp)?;
+                    }
+                }
+            }
+        }
+    }
+    Ok(())
 }
 
 #[tauri::command]
@@ -74,19 +100,19 @@ pub async fn list_connections(
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
     // 開いているプールがあれば先に閉じる
-    let pool = {
+    let active = {
         let mut pools = state.pools.lock().expect("pools mutex poisoned");
         pools.remove(&id)
     };
-    if let Some(pool) = pool {
-        pool.close().await;
+    if let Some(active) = active {
+        active.shutdown().await;
     }
 
     {
         let conn = state.local_db.lock().expect("local_db mutex poisoned");
         local_db::delete(&conn, id)?;
     }
-    keychain::delete_password(id)?;
+    keychain::delete_all(id)?;
     tracing::info!(%id, "deleted connection");
     Ok(())
 }
@@ -103,11 +129,11 @@ pub async fn open_connection(
     id: Uuid,
 ) -> AppResult<OpenConnectionResult> {
     // 既に開いている場合はそのまま version だけ返す
-    let existing = {
+    let existing_pool = {
         let pools = state.pools.lock().expect("pools mutex poisoned");
-        pools.get(&id).cloned()
+        pools.get(&id).map(|ac| ac.pool.clone())
     };
-    if let Some(pool) = existing {
+    if let Some(pool) = existing_pool {
         let version = mysql_client::fetch_version(&pool).await?;
         return Ok(OpenConnectionResult { id, version });
     }
@@ -118,37 +144,75 @@ pub async fn open_connection(
     }
     .ok_or_else(|| AppError::NotFound(format!("connection {id} not found")))?;
 
-    let password = keychain::get_password(id)?;
-    let config = ConnectionConfig {
-        host: saved.host,
-        port: saved.port,
-        user: saved.user,
-        password,
-        database: saved.database,
-        use_ssl: saved.use_ssl,
-    };
+    let config = materialize_config(&saved)?;
 
-    tracing::info!(%id, host = %config.host, "opening connection");
-    let pool = mysql_client::connect_pool(&config).await?;
-    let version = mysql_client::fetch_version(&pool).await?;
+    tracing::info!(%id, host = %config.host, ssh = config.ssh.is_some(), "opening connection");
+    let opened = mysql_client::open(&config).await?;
+    let version = mysql_client::fetch_version(&opened.pool).await?;
 
     {
         let mut pools = state.pools.lock().expect("pools mutex poisoned");
-        pools.insert(id, pool);
+        pools.insert(
+            id,
+            ActiveConnection {
+                pool: opened.pool,
+                tunnel: opened.tunnel,
+            },
+        );
     }
     tracing::info!(%id, %version, "connection opened");
 
     Ok(OpenConnectionResult { id, version })
 }
 
+fn materialize_config(saved: &local_db::SavedConnection) -> AppResult<ConnectionConfig> {
+    let password = keychain::get(saved.id, Slot::DbPassword)?;
+    let ssh = if let Some(ssh_meta) = &saved.ssh {
+        let auth = match ssh_meta.auth_kind {
+            SshAuthKind::Password => {
+                let pw = keychain::get(saved.id, Slot::SshPassword)?;
+                SshAuthInput::Password { password: pw }
+            }
+            SshAuthKind::Key => {
+                let key_path = ssh_meta
+                    .key_path
+                    .clone()
+                    .ok_or_else(|| AppError::InvalidData("ssh key path missing".into()))?;
+                let passphrase = keychain::try_get(saved.id, Slot::SshKeyPassphrase)?;
+                SshAuthInput::Key {
+                    key_path,
+                    passphrase,
+                }
+            }
+        };
+        Some(SshConfigInput {
+            host: ssh_meta.host.clone(),
+            port: ssh_meta.port,
+            user: ssh_meta.user.clone(),
+            auth,
+        })
+    } else {
+        None
+    };
+    Ok(ConnectionConfig {
+        host: saved.host.clone(),
+        port: saved.port,
+        user: saved.user.clone(),
+        password,
+        database: saved.database.clone(),
+        ssl: SslConfigInput::from_saved(saved.ssl.clone()),
+        ssh,
+    })
+}
+
 #[tauri::command]
 pub async fn close_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
-    let pool = {
+    let active = {
         let mut pools = state.pools.lock().expect("pools mutex poisoned");
         pools.remove(&id)
     };
-    if let Some(pool) = pool {
-        pool.close().await;
+    if let Some(active) = active {
+        active.shutdown().await;
         tracing::info!(%id, "connection closed");
     }
     Ok(())

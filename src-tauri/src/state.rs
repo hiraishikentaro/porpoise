@@ -5,13 +5,26 @@ use rusqlite::Connection;
 use sqlx::MySqlPool;
 use uuid::Uuid;
 
+use crate::db::ssh_tunnel::SshTunnel;
+
+pub struct ActiveConnection {
+    pub pool: MySqlPool,
+    pub tunnel: Option<SshTunnel>,
+}
+
+impl ActiveConnection {
+    pub async fn shutdown(self) {
+        self.pool.close().await;
+        if let Some(tunnel) = self.tunnel {
+            tunnel.shutdown().await;
+        }
+    }
+}
+
 /// Application-wide state shared between Tauri commands.
-///
-/// - `local_db`: 接続メタデータ (saved_connections) を保持する rusqlite コネクション
-/// - `pools`: 開いている MySQL 接続プール。MySqlPool 内部は Arc なので clone で渡す
 pub struct AppState {
     pub local_db: Mutex<Connection>,
-    pub pools: Mutex<HashMap<Uuid, MySqlPool>>,
+    pub pools: Mutex<HashMap<Uuid, ActiveConnection>>,
 }
 
 impl AppState {

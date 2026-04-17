@@ -1,5 +1,5 @@
-import { useEffect, useState } from "react";
-import { Button } from "@/components/ui/button";
+import { useEffect, useMemo, useState } from "react";
+import { colorForName, initialsOf, isLocalHost, statusColorVars } from "@/lib/status-color";
 import {
   closeConnection,
   deleteConnection,
@@ -30,6 +30,7 @@ export function SavedConnections({
   onClosed,
 }: Props) {
   const [items, setItems] = useState<SavedConnection[]>([]);
+  const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
@@ -55,6 +56,15 @@ export function SavedConnections({
       cancelled = true;
     };
   }, [refreshKey]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((c) => {
+      const hay = `${c.name} ${c.host} ${c.user} ${c.database ?? ""}`.toLowerCase();
+      return hay.includes(q);
+    });
+  }, [items, query]);
 
   async function handleDelete(id: string) {
     try {
@@ -92,86 +102,159 @@ export function SavedConnections({
   }
 
   return (
-    <div className="flex flex-col gap-2">
-      <div className="flex items-center justify-between">
-        <h2 className="text-sm font-semibold">Saved connections</h2>
-        <span className="text-muted-foreground text-xs">{items.length}</span>
+    <div className="flex h-full flex-col">
+      <div className="flex items-center gap-2 px-3 pt-3 pb-2">
+        <div className="flex h-9 flex-1 items-center gap-2 rounded-md border border-border bg-input/50 px-3">
+          <SearchIcon />
+          <input
+            placeholder="Search connections…"
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            className="h-full flex-1 bg-transparent text-sm outline-none placeholder:text-muted-foreground/70"
+          />
+          <span className="hidden text-[0.7rem] text-muted-foreground/50 sm:inline">⌘F</span>
+        </div>
       </div>
-      {loading && <p className="text-muted-foreground text-xs">Loading…</p>}
-      {error && <p className="text-destructive text-xs">{error}</p>}
-      {!loading && items.length === 0 && (
-        <p className="text-muted-foreground text-xs">No saved connections yet.</p>
+
+      {error && (
+        <p className="mx-3 mb-2 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </p>
       )}
-      <ul className="flex flex-col gap-1">
-        {items.map((conn) => {
-          const selected = conn.id === selectedId;
-          const open = activeIds.has(conn.id);
-          const isOpening = pending?.kind === "open" && pending.id === conn.id;
-          const isClosing = pending?.kind === "close" && pending.id === conn.id;
-          return (
-            <li key={conn.id}>
-              <div
-                className={`group flex flex-col gap-1 rounded-md border px-3 py-2 text-sm ${
-                  selected ? "border-primary bg-accent" : "border-transparent hover:bg-accent"
-                }`}
-              >
-                <div className="flex items-start justify-between gap-2">
-                  <button
-                    type="button"
-                    onClick={() => onSelect(conn)}
-                    className="flex min-w-0 flex-1 flex-col items-start text-left"
-                  >
-                    <span className="flex items-center gap-2 truncate font-medium">
-                      <span
-                        role="img"
-                        aria-label={open ? "connected" : "disconnected"}
-                        className={`inline-block h-2 w-2 shrink-0 rounded-full ${
-                          open ? "bg-emerald-500" : "bg-muted-foreground/40"
-                        }`}
-                      />
-                      <span className="truncate">{conn.name}</span>
+
+      <div className="flex-1 overflow-y-auto px-2 pb-3">
+        {loading && <p className="px-3 py-2 text-xs text-muted-foreground">Loading…</p>}
+        {!loading && filtered.length === 0 && (
+          <p className="px-3 py-2 text-xs text-muted-foreground">
+            {items.length === 0 ? "No saved connections yet." : "No match."}
+          </p>
+        )}
+        <ul className="flex flex-col gap-0.5">
+          {filtered.map((conn) => {
+            const selected = conn.id === selectedId;
+            const open = activeIds.has(conn.id);
+            const isOpening = pending?.kind === "open" && pending.id === conn.id;
+            const isClosing = pending?.kind === "close" && pending.id === conn.id;
+            const color = colorForName(conn.name);
+            const local = isLocalHost(conn.host);
+
+            return (
+              <li key={conn.id}>
+                <button
+                  type="button"
+                  onClick={() => onSelect(conn)}
+                  className={`group relative flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors ${
+                    selected ? "bg-sidebar-accent" : "hover:bg-sidebar-accent/60"
+                  }`}
+                >
+                  <Avatar label={initialsOf(conn.name)} color={color} active={open} />
+                  <div className="flex min-w-0 flex-1 flex-col">
+                    <div className="flex items-center gap-1.5">
+                      <span className="truncate text-sm font-medium">{conn.name}</span>
+                      {local && (
+                        <span
+                          className="text-xs font-normal"
+                          style={{ color: "oklch(0.72 0.15 145)" }}
+                        >
+                          (local)
+                        </span>
+                      )}
+                      {conn.ssh && (
+                        <span
+                          className="rounded-sm bg-accent/15 px-1 text-[0.65rem] font-semibold tracking-wide uppercase text-accent"
+                          title="via SSH tunnel"
+                        >
+                          ssh
+                        </span>
+                      )}
+                    </div>
+                    <span className="truncate text-xs text-muted-foreground">
+                      {conn.host}
+                      {conn.port !== 3306 && `:${conn.port}`}
+                      {conn.database && ` / ${conn.database}`}
                     </span>
-                    <span className="text-muted-foreground truncate text-xs">
-                      {conn.user}@{conn.host}:{conn.port}
-                      {conn.database ? `/${conn.database}` : ""}
-                    </span>
-                  </button>
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleDelete(conn.id)}
-                    className="text-muted-foreground hover:text-destructive opacity-0 group-hover:opacity-100"
-                    aria-label={`Delete ${conn.name}`}
-                  >
-                    ×
-                  </Button>
-                </div>
-                <div className="flex justify-end">
-                  {open ? (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={isClosing}
-                      onClick={() => handleClose(conn.id)}
+                  </div>
+                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                    {open ? (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleClose(conn.id);
+                        }}
+                        disabled={isClosing}
+                        className="rounded-md border border-accent/60 px-2 py-0.5 text-xs text-accent hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+                      >
+                        {isClosing ? "…" : "Close"}
+                      </button>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={(e) => {
+                          e.stopPropagation();
+                          handleOpen(conn.id);
+                        }}
+                        disabled={isOpening}
+                        className="rounded-md border border-border px-2 py-0.5 text-xs text-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+                      >
+                        {isOpening ? "…" : "Open"}
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleDelete(conn.id);
+                      }}
+                      className="rounded-md px-1.5 py-0.5 text-xs text-muted-foreground hover:text-destructive"
+                      aria-label={`Delete ${conn.name}`}
                     >
-                      {isClosing ? "Closing…" : "Disconnect"}
-                    </Button>
-                  ) : (
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      disabled={isOpening}
-                      onClick={() => handleOpen(conn.id)}
-                    >
-                      {isOpening ? "Connecting…" : "Connect"}
-                    </Button>
-                  )}
-                </div>
-              </div>
-            </li>
-          );
-        })}
-      </ul>
+                      ✕
+                    </button>
+                  </div>
+                </button>
+              </li>
+            );
+          })}
+        </ul>
+      </div>
     </div>
+  );
+}
+
+function Avatar({
+  label,
+  color,
+  active,
+}: {
+  label: string;
+  color: ReturnType<typeof colorForName>;
+  active: boolean;
+}) {
+  return (
+    <span
+      className={`relative inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-full text-xs font-semibold tracking-wide transition-shadow ${
+        active ? "ring-2 ring-accent ring-offset-2 ring-offset-sidebar" : ""
+      }`}
+      style={statusColorVars(color)}
+    >
+      {label}
+    </span>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3.5 w-3.5 text-muted-foreground"
+      role="img"
+      aria-label="search"
+      fill="none"
+    >
+      <title>search</title>
+      <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m11 11 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
   );
 }

@@ -21,5 +21,23 @@ services:
       timeout: 3s
       retries: 20
 
+  ssh:
+    # Phase 1 SSH トンネル検証用。MySQL と同じ docker network にいるので
+    # アプリ側からは target_host="mysql" / port=3306 で接続する。
+    image: linuxserver/openssh-server:latest
+    container_name: porpoise-ssh
+    environment:
+      PASSWORD_ACCESS: "true"
+      USER_NAME: porpoise
+      USER_PASSWORD: porpoise
+      SUDO_ACCESS: "false"
+      PUID: "1000"
+      PGID: "1000"
+    ports:
+      - "2222:2222"
+    depends_on:
+      mysql:
+        condition: service_healthy
+
 volumes:
   porpoise-mysql-data:

@@ -19,6 +19,9 @@ pub enum AppError {
 
     #[error("not found: {0}")]
     NotFound(String),
+
+    #[error("ssh error: {0}")]
+    Ssh(String),
 }
 
 impl Serialize for AppError {

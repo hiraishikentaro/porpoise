@@ -7,6 +7,80 @@ use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SslMode {
+    #[default]
+    Disabled,
+    Preferred,
+    Required,
+    VerifyCa,
+    VerifyIdentity,
+}
+
+impl SslMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Disabled => "disabled",
+            Self::Preferred => "preferred",
+            Self::Required => "required",
+            Self::VerifyCa => "verify_ca",
+            Self::VerifyIdentity => "verify_identity",
+        }
+    }
+
+    fn from_str(s: &str) -> Self {
+        match s {
+            "preferred" => Self::Preferred,
+            "required" => Self::Required,
+            "verify_ca" => Self::VerifyCa,
+            "verify_identity" => Self::VerifyIdentity,
+            _ => Self::Disabled,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum SshAuthKind {
+    Password,
+    Key,
+}
+
+impl SshAuthKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Password => "password",
+            Self::Key => "key",
+        }
+    }
+
+    fn from_str(s: &str) -> Option<Self> {
+        match s {
+            "password" => Some(Self::Password),
+            "key" => Some(Self::Key),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedSshConfig {
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    pub auth_kind: SshAuthKind,
+    pub key_path: Option<String>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct SavedSslConfig {
+    pub mode: SslMode,
+    pub ca_cert_path: Option<String>,
+    pub client_cert_path: Option<String>,
+    pub client_key_path: Option<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct SavedConnection {
     pub id: Uuid,
@@ -15,7 +89,8 @@ pub struct SavedConnection {
     pub port: u16,
     pub user: String,
     pub database: Option<String>,
-    pub use_ssl: bool,
+    pub ssl: SavedSslConfig,
+    pub ssh: Option<SavedSshConfig>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -29,6 +104,7 @@ pub fn open(path: &Path) -> AppResult<Connection> {
 }
 
 fn run_migrations(conn: &Connection) -> AppResult<()> {
+    // 0001: base table (exists from Phase 1 slice 2). IF NOT EXISTS で既存 DB に無害。
     conn.execute_batch(
         "CREATE TABLE IF NOT EXISTS saved_connections (
             id TEXT PRIMARY KEY NOT NULL,
@@ -42,7 +118,44 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
             updated_at TEXT NOT NULL
         );",
     )?;
+
+    // 0002: SSL モード細分化 + SSH トンネル列。既存列があれば ADD COLUMN を skip。
+    let existing_cols = existing_columns(conn, "saved_connections")?;
+    let additions: &[(&str, &str)] = &[
+        ("ssl_mode", "TEXT NOT NULL DEFAULT 'disabled'"),
+        ("ssl_ca_cert_path", "TEXT"),
+        ("ssl_client_cert_path", "TEXT"),
+        ("ssl_client_key_path", "TEXT"),
+        ("ssh_enabled", "INTEGER NOT NULL DEFAULT 0"),
+        ("ssh_host", "TEXT"),
+        ("ssh_port", "INTEGER"),
+        ("ssh_user", "TEXT"),
+        ("ssh_auth_kind", "TEXT"),
+        ("ssh_key_path", "TEXT"),
+    ];
+    for (name, decl) in additions {
+        if !existing_cols.iter().any(|c| c == name) {
+            conn.execute_batch(&format!(
+                "ALTER TABLE saved_connections ADD COLUMN {name} {decl};"
+            ))?;
+        }
+    }
+
+    // 既存の use_ssl=1 行を ssl_mode='preferred' に昇格 (初回のみ)
+    conn.execute(
+        "UPDATE saved_connections SET ssl_mode = 'preferred'
+         WHERE use_ssl = 1 AND ssl_mode = 'disabled'",
+        [],
+    )?;
+
     Ok(())
+}
+
+fn existing_columns(conn: &Connection, table: &str) -> rusqlite::Result<Vec<String>> {
+    let sql = format!("PRAGMA table_info({table})");
+    let mut stmt = conn.prepare(&sql)?;
+    let iter = stmt.query_map([], |row| row.get::<_, String>("name"))?;
+    iter.collect()
 }
 
 fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
@@ -50,10 +163,43 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
     let id = Uuid::parse_str(&id_str).map_err(|e| {
         rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
     })?;
-    let created_at: String = row.get("created_at")?;
-    let updated_at: String = row.get("updated_at")?;
     let port: i64 = row.get("port")?;
-    let use_ssl: i64 = row.get("use_ssl")?;
+    let ssl_mode: String = row.get("ssl_mode")?;
+    let ssh_enabled: i64 = row.get("ssh_enabled")?;
+    let ssh = if ssh_enabled != 0 {
+        let ssh_host: Option<String> = row.get("ssh_host")?;
+        let ssh_port: Option<i64> = row.get("ssh_port")?;
+        let ssh_user: Option<String> = row.get("ssh_user")?;
+        let auth_kind_str: Option<String> = row.get("ssh_auth_kind")?;
+        let key_path: Option<String> = row.get("ssh_key_path")?;
+        match (ssh_host, ssh_port, ssh_user, auth_kind_str.as_deref()) {
+            (Some(h), Some(p), Some(u), Some(kind_str)) => {
+                let auth_kind = SshAuthKind::from_str(kind_str).ok_or_else(|| {
+                    rusqlite::Error::FromSqlConversionFailure(
+                        0,
+                        rusqlite::types::Type::Text,
+                        format!("unknown ssh auth kind: {kind_str}").into(),
+                    )
+                })?;
+                Some(SavedSshConfig {
+                    host: h,
+                    port: u16::try_from(p).map_err(|e| {
+                        rusqlite::Error::FromSqlConversionFailure(
+                            0,
+                            rusqlite::types::Type::Integer,
+                            Box::new(e),
+                        )
+                    })?,
+                    user: u,
+                    auth_kind,
+                    key_path,
+                })
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
 
     Ok(SavedConnection {
         id,
@@ -68,9 +214,15 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
         })?,
         user: row.get("username")?,
         database: row.get("database")?,
-        use_ssl: use_ssl != 0,
-        created_at: parse_ts(&created_at)?,
-        updated_at: parse_ts(&updated_at)?,
+        ssl: SavedSslConfig {
+            mode: SslMode::from_str(&ssl_mode),
+            ca_cert_path: row.get("ssl_ca_cert_path")?,
+            client_cert_path: row.get("ssl_client_cert_path")?,
+            client_key_path: row.get("ssl_client_key_path")?,
+        },
+        ssh,
+        created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
+        updated_at: parse_ts(&row.get::<_, String>("updated_at")?)?,
     })
 }
 
@@ -88,7 +240,8 @@ pub struct NewConnection<'a> {
     pub port: u16,
     pub user: &'a str,
     pub database: Option<&'a str>,
-    pub use_ssl: bool,
+    pub ssl: SavedSslConfig,
+    pub ssh: Option<SavedSshConfig>,
 }
 
 pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedConnection> {
@@ -102,8 +255,11 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
 
     conn.execute(
         "INSERT INTO saved_connections
-            (id, name, host, port, username, database, use_ssl, created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
+            (id, name, host, port, username, database, use_ssl,
+             ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
+             ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
+             created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?)",
         params![
             id.to_string(),
             input.name,
@@ -111,7 +267,23 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
             i64::from(input.port),
             input.user,
             input.database,
-            i64::from(input.use_ssl),
+            i64::from(matches!(
+                input.ssl.mode,
+                SslMode::Preferred
+                    | SslMode::Required
+                    | SslMode::VerifyCa
+                    | SslMode::VerifyIdentity
+            )),
+            input.ssl.mode.as_str(),
+            input.ssl.ca_cert_path,
+            input.ssl.client_cert_path,
+            input.ssl.client_key_path,
+            i64::from(input.ssh.is_some()),
+            input.ssh.as_ref().map(|s| &s.host),
+            input.ssh.as_ref().map(|s| i64::from(s.port)),
+            input.ssh.as_ref().map(|s| &s.user),
+            input.ssh.as_ref().map(|s| s.auth_kind.as_str()),
+            input.ssh.as_ref().and_then(|s| s.key_path.clone()),
             now_str,
             now_str,
         ],
@@ -124,7 +296,8 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
         port: input.port,
         user: input.user.to_owned(),
         database: input.database.map(str::to_owned),
-        use_ssl: input.use_ssl,
+        ssl: input.ssl,
+        ssh: input.ssh,
         created_at: now,
         updated_at: now,
     })
@@ -132,7 +305,10 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
 
 pub fn get(conn: &Connection, id: Uuid) -> AppResult<Option<SavedConnection>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, host, port, username, database, use_ssl, created_at, updated_at
+        "SELECT id, name, host, port, username, database,
+                ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
+                ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
+                created_at, updated_at
          FROM saved_connections
          WHERE id = ?",
     )?;
@@ -146,7 +322,10 @@ pub fn get(conn: &Connection, id: Uuid) -> AppResult<Option<SavedConnection>> {
 
 pub fn list(conn: &Connection) -> AppResult<Vec<SavedConnection>> {
     let mut stmt = conn.prepare(
-        "SELECT id, name, host, port, username, database, use_ssl, created_at, updated_at
+        "SELECT id, name, host, port, username, database,
+                ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
+                ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
+                created_at, updated_at
          FROM saved_connections
          ORDER BY created_at ASC",
     )?;
