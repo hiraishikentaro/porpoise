@@ -274,6 +274,36 @@ export function schemaSnapshot(connectionId: string, database: string): Promise<
   return invoke<SchemaSnapshot>("schema_snapshot", { connectionId, database });
 }
 
+export type ErColumn = {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  is_pk: boolean;
+};
+
+export type ErTable = {
+  name: string;
+  columns: ErColumn[];
+};
+
+export type ErForeignKey = {
+  constraint: string;
+  src_table: string;
+  src_columns: string[];
+  ref_table: string;
+  ref_columns: string[];
+};
+
+export type ErSchema = {
+  database: string;
+  tables: ErTable[];
+  foreign_keys: ErForeignKey[];
+};
+
+export function erSchema(connectionId: string, database: string): Promise<ErSchema> {
+  return invoke<ErSchema>("er_schema", { connectionId, database });
+}
+
 export type QueryHistoryRow = {
   id: number;
   connection_id: string;
@@ -327,4 +357,99 @@ export function listSnippets(connectionId: string): Promise<SavedQuery[]> {
 
 export function deleteSnippet(id: number): Promise<boolean> {
   return invoke<boolean>("delete_snippet", { id });
+}
+
+export type ExportFormat = "csv" | "json" | "sql";
+
+export type ExportResult = {
+  path: string;
+  rows: number;
+  bytes: number;
+};
+
+export function exportTable(args: {
+  connectionId: string;
+  database: string;
+  table: string;
+  sort?: SortKey[] | null;
+  filters?: Filter[] | null;
+  filterMatch?: FilterMatch | null;
+  format: ExportFormat;
+  path: string;
+}): Promise<ExportResult> {
+  return invoke<ExportResult>("export_table", {
+    connectionId: args.connectionId,
+    database: args.database,
+    table: args.table,
+    sort: args.sort ?? null,
+    filters: args.filters ?? null,
+    filterMatch: args.filterMatch ?? null,
+    format: args.format,
+    path: args.path,
+  });
+}
+
+export type CsvPreview = {
+  header: string[];
+  rows: string[][];
+  total_approx: number | null;
+};
+
+export function previewCsv(path: string, limit: number): Promise<CsvPreview> {
+  return invoke<CsvPreview>("preview_csv", { path, limit });
+}
+
+export type ImportMode = "insert" | "upsert";
+
+export type ColumnMapping = {
+  target: string;
+  csv_index: number | null;
+};
+
+export type ImportResult = {
+  inserted: number;
+  rows_read: number;
+  dry_run: boolean;
+  batches: number;
+  warnings: string[];
+};
+
+export function importCsv(args: {
+  connectionId: string;
+  database: string;
+  table: string;
+  path: string;
+  mapping: ColumnMapping[];
+  mode: ImportMode;
+  hasHeader: boolean;
+  emptyAsNull: boolean;
+  dryRun: boolean;
+}): Promise<ImportResult> {
+  return invoke<ImportResult>("import_csv", {
+    connectionId: args.connectionId,
+    database: args.database,
+    table: args.table,
+    path: args.path,
+    mapping: args.mapping,
+    mode: args.mode,
+    hasHeader: args.hasHeader,
+    emptyAsNull: args.emptyAsNull,
+    dryRun: args.dryRun,
+  });
+}
+
+export function exportQuery(args: {
+  connectionId: string;
+  database: string | null;
+  sql: string;
+  format: ExportFormat;
+  path: string;
+}): Promise<ExportResult> {
+  return invoke<ExportResult>("export_query", {
+    connectionId: args.connectionId,
+    database: args.database,
+    sql: args.sql,
+    format: args.format,
+    path: args.path,
+  });
 }

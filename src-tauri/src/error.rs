@@ -22,6 +22,9 @@ pub enum AppError {
 
     #[error("ssh error: {0}")]
     Ssh(String),
+
+    #[error("io error: {0}")]
+    Io(String),
 }
 
 impl Serialize for AppError {

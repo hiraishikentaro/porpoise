@@ -20,6 +20,7 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_dialog::init())
         .setup(|app| {
             let data_dir = app
                 .path()
@@ -49,12 +50,17 @@ pub fn run() {
             commands::schema::commit_changes,
             commands::schema::execute_query,
             commands::schema::schema_snapshot,
+            commands::schema::er_schema,
             commands::history::list_query_history,
             commands::history::clear_query_history,
             commands::snippets::save_snippet,
             commands::snippets::update_snippet,
             commands::snippets::list_snippets,
             commands::snippets::delete_snippet,
+            commands::export::export_table,
+            commands::export::export_query,
+            commands::import::preview_csv,
+            commands::import::import_csv,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

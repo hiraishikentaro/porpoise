@@ -2,13 +2,16 @@ import { autocompletion } from "@codemirror/autocomplete";
 import { MySQL, sql as sqlLang } from "@codemirror/lang-sql";
 import { StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
+import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 import {
   clearQueryHistory,
   deleteSnippet,
+  type ExportFormat,
   executeQuery,
+  exportQuery,
   listDatabases,
   listQueryHistory,
   listSnippets,
@@ -419,7 +422,12 @@ export function SqlEditor({
               className="h-full text-sm"
             />
           </div>
-          <ResultsPane runState={runState} />
+          <ResultsPane
+            runState={runState}
+            connectionId={connectionId}
+            database={database}
+            lastSql={sqlTextRef}
+          />
         </div>
 
         {historyOpen && (
@@ -1098,7 +1106,17 @@ function SearchIcon() {
   );
 }
 
-function ResultsPane({ runState }: { runState: RunState }) {
+function ResultsPane({
+  runState,
+  connectionId,
+  database,
+  lastSql,
+}: {
+  runState: RunState;
+  connectionId: string;
+  database: string | null;
+  lastSql: React.RefObject<string>;
+}) {
   if (runState.kind === "idle") {
     return (
       <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
@@ -1133,8 +1151,9 @@ function ResultsPane({ runState }: { runState: RunState }) {
       <header className="flex items-center justify-between px-4 py-1.5 text-xs">
         <span className="text-muted-foreground">
           {r.returned} row{r.returned === 1 ? "" : "s"}
+          <span className="ml-2 text-muted-foreground/60">· {r.elapsed_ms} ms</span>
         </span>
-        <span className="text-muted-foreground/60">{r.elapsed_ms} ms</span>
+        <QueryExportMenu connectionId={connectionId} database={database} lastSql={lastSql} />
       </header>
       <div className="flex-1 overflow-auto">
         <table className="min-w-full text-left text-sm">
@@ -1172,6 +1191,96 @@ function ResultsPane({ runState }: { runState: RunState }) {
         </table>
         {r.rows.length === 0 && <p className="px-4 py-3 text-xs text-muted-foreground">No rows.</p>}
       </div>
+    </div>
+  );
+}
+
+function QueryExportMenu({
+  connectionId,
+  database,
+  lastSql,
+}: {
+  connectionId: string;
+  database: string | null;
+  lastSql: React.RefObject<string>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<ExportFormat | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  async function run(format: ExportFormat) {
+    setOpen(false);
+    const sql = lastSql.current.trim().replace(/;+\s*$/, "");
+    if (!sql) {
+      setToast("No query to export");
+      window.setTimeout(() => setToast(null), 3000);
+      return;
+    }
+    setBusy(format);
+    try {
+      const ext = format === "sql" ? "sql" : format;
+      const path = await saveDialog({
+        defaultPath: `query.${ext}`,
+        filters: [{ name: format.toUpperCase(), extensions: [ext] }],
+      });
+      if (!path) return;
+      const result = await exportQuery({ connectionId, database, sql, format, path });
+      setToast(`Exported ${result.rows.toLocaleString()} rows`);
+      window.setTimeout(() => setToast(null), 4000);
+    } catch (e) {
+      setToast(`Failed: ${String(e)}`);
+      window.setTimeout(() => setToast(null), 6000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={busy !== null}
+        className="inline-flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.7rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent disabled:opacity-50"
+      >
+        {busy ? "…" : "Export"}
+        <span aria-hidden className="text-[0.55rem] opacity-60">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close"
+            className="fixed inset-0 z-30 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-full z-40 mt-1 min-w-[160px] overflow-hidden rounded-md border border-border bg-popover shadow-lg">
+            {(
+              [
+                ["csv", "CSV (.csv)"],
+                ["json", "JSON Lines (.json)"],
+                ["sql", "SQL INSERTs (.sql)"],
+              ] as const
+            ).map(([fmt, label]) => (
+              <button
+                key={fmt}
+                type="button"
+                onClick={() => run(fmt)}
+                className="block w-full px-3 py-1.5 text-left text-[0.75rem] text-foreground hover:bg-sidebar-accent/60"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {toast && (
+        <div className="pointer-events-none absolute right-0 top-full z-40 mt-1 max-w-[360px] rounded-md border border-accent/40 bg-card/95 px-3 py-1.5 text-[0.7rem] shadow-lg backdrop-blur">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

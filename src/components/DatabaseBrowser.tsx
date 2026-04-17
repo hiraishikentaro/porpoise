@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { CsvImportModal } from "@/components/CsvImportModal";
 import { TableDetail } from "@/components/TableDetail";
 import { listDatabases, listTables, type SavedConnection, type TableInfo } from "@/lib/tauri";
 
@@ -8,9 +9,11 @@ type Props = {
   onOpenTable: (connection: SavedConnection, database: string, table: string) => void;
   /** SQL クエリタブを新規で開く (現在選択中の DB をデフォルトに) */
   onNewQuery: (connection: SavedConnection, database: string | null) => void;
+  /** 選択中の DB で ER 図タブを開く */
+  onOpenEr: (connection: SavedConnection, database: string) => void;
 };
 
-export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) {
+export function DatabaseBrowser({ connection, onOpenTable, onNewQuery, onOpenEr }: Props) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -19,6 +22,10 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<"dbs" | "tables" | null>(null);
   const [dbsCollapsed, setDbsCollapsed] = useState(false);
+  const [importTarget, setImportTarget] = useState<{ database: string; table: string } | null>(
+    null,
+  );
+  const [reloadTick, setReloadTick] = useState(0);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: connection.id is the trigger
   useEffect(() => {
@@ -173,6 +180,16 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
             <div className="flex items-center gap-2">
               <button
                 type="button"
+                onClick={() => selectedDb && onOpenEr(connection, selectedDb)}
+                disabled={!selectedDb}
+                className="inline-flex items-center gap-1 rounded-sm border border-chart-2/50 bg-chart-2/10 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.08em] text-chart-2 transition-colors hover:bg-chart-2 hover:text-background disabled:opacity-50"
+                title="Open ER diagram for this database"
+                style={{ fontFamily: "var(--font-mono)" }}
+              >
+                ER
+              </button>
+              <button
+                type="button"
                 onClick={() => onNewQuery(connection, selectedDb)}
                 className="inline-flex items-center gap-1 rounded-sm border border-accent/50 bg-accent/10 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.08em] text-accent transition-colors hover:bg-accent hover:text-accent-foreground"
                 title="Open new SQL editor"
@@ -232,6 +249,19 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
                   <span className="truncate">{t.name}</span>
                   {t.kind === "view" && <span className="tp-chip-ghost">view</span>}
                 </button>
+                {t.kind !== "view" && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (selectedDb) setImportTarget({ database: selectedDb, table: t.name });
+                    }}
+                    className="text-muted-foreground/40 opacity-0 transition-all hover:text-chart-2 group-hover:opacity-100"
+                    aria-label="Import CSV"
+                    title="Import CSV"
+                  >
+                    <ImportIcon />
+                  </button>
+                )}
                 <button
                   type="button"
                   onClick={() => {
@@ -260,7 +290,7 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
       )}
       {!error && selectedDb && selectedTable ? (
         <TableDetail
-          key={`${connection.id}:${selectedDb}:${selectedTable}`}
+          key={`${connection.id}:${selectedDb}:${selectedTable}:${reloadTick}`}
           connectionId={connection.id}
           database={selectedDb}
           table={selectedTable}
@@ -269,6 +299,18 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
         <div className="flex items-center justify-center p-10 text-xs text-muted-foreground">
           {error ? null : "Select a table. Double-click to open in a new tab."}
         </div>
+      )}
+
+      {importTarget && (
+        <CsvImportModal
+          connectionId={connection.id}
+          database={importTarget.database}
+          table={importTarget.table}
+          onClose={() => setImportTarget(null)}
+          onImported={() => {
+            setReloadTick((n) => n + 1);
+          }}
+        />
       )}
     </div>
   );
@@ -334,6 +376,27 @@ function ViewIcon() {
     </svg>
   );
 }
+function ImportIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3 w-3" role="img" aria-label="import" fill="none">
+      <title>import CSV</title>
+      <path
+        d="M8 2v8m0 0-3-3m3 3 3-3"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+      <path
+        d="M3 12v1a2 2 0 0 0 2 2h6a2 2 0 0 0 2-2v-1"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
+  );
+}
+
 function OpenInNewIcon() {
   return (
     <svg

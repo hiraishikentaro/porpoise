@@ -12,10 +12,13 @@ function isLongEditor(kind: EditorKind): boolean {
   return kind === "textarea" || kind === "json";
 }
 
+import { save } from "@tauri-apps/plugin-dialog";
 import {
   type CellChange,
   type ColumnInfo,
   commitChanges,
+  type ExportFormat,
+  exportTable,
   type Filter,
   type FilterMatch,
   type RowChange,
@@ -488,6 +491,14 @@ export function TableView({ connectionId, database, table, columns }: Props) {
               <span aria-hidden>+</span> Row
             </button>
           )}
+          <ExportMenu
+            connectionId={connectionId}
+            database={database}
+            table={table}
+            sort={sortKeys}
+            filters={appliedFilters}
+            filterMatch={appliedFilterMatch}
+          />
           {totalChanges > 0 && (
             <>
               <button
@@ -1768,6 +1779,107 @@ function CommitModal({
           </button>
         </footer>
       </div>
+    </div>
+  );
+}
+
+function ExportMenu({
+  connectionId,
+  database,
+  table,
+  sort,
+  filters,
+  filterMatch,
+}: {
+  connectionId: string;
+  database: string;
+  table: string;
+  sort: SortKey[];
+  filters: Filter[];
+  filterMatch: FilterMatch;
+}) {
+  const [open, setOpen] = useState(false);
+  const [busy, setBusy] = useState<ExportFormat | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
+
+  async function doExport(format: ExportFormat) {
+    setOpen(false);
+    setBusy(format);
+    setToast(null);
+    try {
+      const ext = format === "sql" ? "sql" : format;
+      const path = await save({
+        defaultPath: `${table}.${ext}`,
+        filters: [{ name: format.toUpperCase(), extensions: [ext] }],
+      });
+      if (!path) return;
+      const result = await exportTable({
+        connectionId,
+        database,
+        table,
+        sort: sort.length > 0 ? sort : null,
+        filters: filters.length > 0 ? filters : null,
+        filterMatch: filters.length > 0 ? filterMatch : null,
+        format,
+        path,
+      });
+      setToast(`Exported ${result.rows.toLocaleString()} rows → ${result.path}`);
+      window.setTimeout(() => setToast(null), 4000);
+    } catch (e) {
+      setToast(`Export failed: ${String(e)}`);
+      window.setTimeout(() => setToast(null), 6000);
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        onClick={() => setOpen((v) => !v)}
+        disabled={busy !== null}
+        className="inline-flex h-6 items-center gap-1 rounded-md border border-border px-2 text-[0.7rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent disabled:opacity-50"
+        title="Export rows"
+      >
+        {busy ? "Exporting…" : "Export"}
+        <span aria-hidden className="text-[0.55rem] opacity-60">
+          ▾
+        </span>
+      </button>
+      {open && (
+        <>
+          <button
+            type="button"
+            aria-label="Close export menu"
+            className="fixed inset-0 z-30 cursor-default"
+            onClick={() => setOpen(false)}
+          />
+          <div className="absolute right-0 top-full z-40 mt-1 min-w-[160px] overflow-hidden rounded-md border border-border bg-popover shadow-lg">
+            {(
+              [
+                ["csv", "CSV (.csv)"],
+                ["json", "JSON Lines (.json)"],
+                ["sql", "SQL INSERTs (.sql)"],
+              ] as const
+            ).map(([fmt, label]) => (
+              <button
+                key={fmt}
+                type="button"
+                onClick={() => doExport(fmt)}
+                className="block w-full px-3 py-1.5 text-left text-[0.75rem] text-foreground hover:bg-sidebar-accent/60"
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        </>
+      )}
+      {toast && (
+        <div className="pointer-events-none absolute right-0 top-full z-40 mt-1 max-w-[400px] rounded-md border border-accent/40 bg-card/95 px-3 py-1.5 text-[0.7rem] shadow-lg backdrop-blur">
+          {toast}
+        </div>
+      )}
     </div>
   );
 }

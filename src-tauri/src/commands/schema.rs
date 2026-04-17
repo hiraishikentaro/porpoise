@@ -34,7 +34,7 @@ pub struct ColumnInfo {
     pub comment: Option<String>,
 }
 
-fn pool_of(state: &State<'_, AppState>, id: Uuid) -> AppResult<Pool> {
+pub fn pool_of(state: &State<'_, AppState>, id: Uuid) -> AppResult<Pool> {
     let pools = state.pools.lock().expect("pools mutex poisoned");
     pools
         .get(&id)
@@ -143,7 +143,7 @@ fn column_from_row(row: &Row) -> AppResult<ColumnInfo> {
 
 /// SHOW などで識別子を安全に quote する (backtick)。
 /// 内部に backtick が含まれる場合は二重にしてエスケープ。
-fn quote_ident(name: &str) -> String {
+pub fn quote_ident(name: &str) -> String {
     let escaped = name.replace('`', "``");
     format!("`{}`", escaped)
 }
@@ -194,24 +194,14 @@ pub enum FilterMatch {
     Any,
 }
 
-#[tauri::command]
-#[allow(clippy::too_many_arguments)]
-pub async fn select_table_rows(
-    state: State<'_, AppState>,
-    connection_id: Uuid,
-    database: String,
-    table: String,
-    offset: u64,
-    limit: u32,
-    sort: Option<Vec<SortKey>>,
-    filters: Option<Vec<Filter>>,
+pub fn build_where_order(
+    filters: Option<&[Filter]>,
     filter_match: Option<FilterMatch>,
-) -> AppResult<TablePage> {
-    let pool = pool_of(&state, connection_id)?;
-
+    sort: Option<&[SortKey]>,
+) -> (String, String, Vec<mysql_async::Value>) {
     let mut where_parts: Vec<String> = Vec::new();
     let mut params: Vec<mysql_async::Value> = Vec::new();
-    if let Some(filters) = filters.as_ref() {
+    if let Some(filters) = filters {
         for f in filters {
             let col = quote_ident(&f.column);
             match &f.op {
@@ -256,7 +246,6 @@ pub async fn select_table_rows(
             }
         }
     }
-
     let conjunction = match filter_match.unwrap_or_default() {
         FilterMatch::All => " AND ",
         FilterMatch::Any => " OR ",
@@ -266,8 +255,7 @@ pub async fn select_table_rows(
     } else {
         format!(" WHERE {}", where_parts.join(conjunction))
     };
-
-    let order_sql = match sort.as_ref() {
+    let order_sql = match sort {
         Some(keys) if !keys.is_empty() => {
             let parts: Vec<String> = keys
                 .iter()
@@ -283,6 +271,26 @@ pub async fn select_table_rows(
         }
         _ => String::new(),
     };
+    (where_sql, order_sql, params)
+}
+
+#[tauri::command]
+#[allow(clippy::too_many_arguments)]
+pub async fn select_table_rows(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    database: String,
+    table: String,
+    offset: u64,
+    limit: u32,
+    sort: Option<Vec<SortKey>>,
+    filters: Option<Vec<Filter>>,
+    filter_match: Option<FilterMatch>,
+) -> AppResult<TablePage> {
+    let pool = pool_of(&state, connection_id)?;
+
+    let (where_sql, order_sql, params) =
+        build_where_order(filters.as_deref(), filter_match, sort.as_deref());
 
     let sql = format!(
         "SELECT * FROM {}.{}{}{} LIMIT {} OFFSET {}",
@@ -338,6 +346,117 @@ pub enum QueryResult {
 pub struct SchemaSnapshot {
     /// table name → ordinal-ordered column names
     pub tables: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErColumn {
+    pub name: String,
+    pub data_type: String,
+    pub nullable: bool,
+    pub is_pk: bool,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErTable {
+    pub name: String,
+    pub columns: Vec<ErColumn>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErForeignKey {
+    pub constraint: String,
+    pub src_table: String,
+    pub src_columns: Vec<String>,
+    pub ref_table: String,
+    pub ref_columns: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct ErSchema {
+    pub database: String,
+    pub tables: Vec<ErTable>,
+    pub foreign_keys: Vec<ErForeignKey>,
+}
+
+#[tauri::command]
+pub async fn er_schema(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    database: String,
+) -> AppResult<ErSchema> {
+    let pool = pool_of(&state, connection_id)?;
+    let mut conn = pool.get_conn().await?;
+
+    // Tables + columns (ordinal ordered)
+    let col_rows: Vec<(String, String, String, String, String)> = conn
+        .exec(
+            "SELECT TABLE_NAME, COLUMN_NAME, COLUMN_TYPE, IS_NULLABLE, COLUMN_KEY
+             FROM information_schema.COLUMNS
+             WHERE TABLE_SCHEMA = ?
+             ORDER BY TABLE_NAME, ORDINAL_POSITION",
+            (database.clone(),),
+        )
+        .await?;
+
+    // FK: 同じ constraint 内で複合キーを組み立てる
+    let fk_rows: Vec<(String, String, String, String, String, u32)> = conn
+        .exec(
+            "SELECT CONSTRAINT_NAME, TABLE_NAME, COLUMN_NAME,
+                    REFERENCED_TABLE_NAME, REFERENCED_COLUMN_NAME, ORDINAL_POSITION
+             FROM information_schema.KEY_COLUMN_USAGE
+             WHERE TABLE_SCHEMA = ?
+               AND REFERENCED_TABLE_SCHEMA = ?
+               AND REFERENCED_TABLE_NAME IS NOT NULL
+             ORDER BY CONSTRAINT_NAME, ORDINAL_POSITION",
+            (database.clone(), database.clone()),
+        )
+        .await?;
+    conn.disconnect().await.ok();
+
+    // tables を map で構築
+    let mut tables_map: std::collections::BTreeMap<String, Vec<ErColumn>> =
+        std::collections::BTreeMap::new();
+    for (table, col, ty, nullable, key) in col_rows {
+        tables_map.entry(table).or_default().push(ErColumn {
+            name: col,
+            data_type: ty,
+            nullable: nullable.eq_ignore_ascii_case("YES"),
+            is_pk: key == "PRI",
+        });
+    }
+    let tables: Vec<ErTable> = tables_map
+        .into_iter()
+        .map(|(name, columns)| ErTable { name, columns })
+        .collect();
+
+    // FK: constraint 毎に集約
+    let mut fk_map: std::collections::BTreeMap<
+        String,
+        (String, Vec<String>, String, Vec<String>),
+    > = std::collections::BTreeMap::new();
+    for (constraint, tbl, col, ref_tbl, ref_col, _pos) in fk_rows {
+        let entry = fk_map
+            .entry(constraint)
+            .or_insert_with(|| (tbl.clone(), Vec::new(), ref_tbl.clone(), Vec::new()));
+        entry.1.push(col);
+        entry.3.push(ref_col);
+    }
+    let foreign_keys: Vec<ErForeignKey> = fk_map
+        .into_iter()
+        .map(|(constraint, (src, srcs, rtbl, refs))| ErForeignKey {
+            constraint,
+            src_table: src,
+            src_columns: srcs,
+            ref_table: rtbl,
+            ref_columns: refs,
+        })
+        .collect();
+
+    Ok(ErSchema {
+        database,
+        tables,
+        foreign_keys,
+    })
 }
 
 #[tauri::command]
@@ -488,7 +607,7 @@ fn record_history(
 }
 
 /// mysql_async::Value → 表示用の文字列 (NULL は None)。
-fn value_to_display(v: Value) -> Option<String> {
+pub fn value_to_display(v: Value) -> Option<String> {
     match v {
         Value::NULL => None,
         Value::Bytes(b) => Some(match std::str::from_utf8(&b) {
@@ -530,7 +649,7 @@ fn value_to_display(v: Value) -> Option<String> {
     }
 }
 
-fn hex_encode(b: &[u8]) -> String {
+pub fn hex_encode(b: &[u8]) -> String {
     let mut out = String::with_capacity(b.len() * 2);
     for byte in b {
         out.push_str(&format!("{:02x}", byte));
