@@ -53,9 +53,10 @@
 /*
  * "Ink & Phosphor" — a dark ink base with a hint of teal,
  * phosphor amber primary + cyan highlight, warm data tokens.
+ * Default (no class) is dark; .light switches to light palette.
  */
-:root {
-  /* Core surfaces — pulled toward cool ink (hue 240) instead of generic navy */
+:root,
+.dark {
   --background: oklch(0.18 0.012 245);
   --foreground: oklch(0.94 0.006 95);
   --card: oklch(0.22 0.013 245);
@@ -70,12 +71,10 @@
   --muted: oklch(0.25 0.014 245);
   --muted-foreground: oklch(0.62 0.018 235);
 
-  /* Phosphor amber — warmer, slightly more chromatic than before */
   --accent: oklch(0.78 0.165 68);
   --accent-foreground: oklch(0.16 0.008 245);
   --accent-glow: oklch(0.78 0.165 68 / 0.22);
 
-  /* Cyan highlight used for secondary/hover hairlines and data numerics */
   --cyan: oklch(0.78 0.12 210);
   --cyan-soft: oklch(0.78 0.12 210 / 0.18);
 
@@ -92,7 +91,6 @@
 
   --radius: 0.5rem;
 
-  /* Sidebar — one shade deeper than the canvas, for visual weight */
   --sidebar: oklch(0.15 0.012 245);
   --sidebar-foreground: oklch(0.92 0.007 95);
   --sidebar-primary: oklch(0.78 0.165 68);
@@ -102,13 +100,67 @@
   --sidebar-border: oklch(1 0 0 / 6%);
   --sidebar-ring: oklch(0.78 0.165 68 / 0.7);
 
-  /* Status label palette — slightly richer than before */
   --status-gray: oklch(0.6 0.01 250);
   --status-blue: oklch(0.56 0.18 250);
   --status-amber: oklch(0.74 0.16 68);
   --status-green: oklch(0.7 0.16 148);
   --status-red: oklch(0.64 0.22 22);
   --status-pink: oklch(0.7 0.2 340);
+}
+
+/*
+ * Light palette — warm paper base (2% yellow tint), same phosphor amber
+ * accent so the product identity stays, but desaturated cyan/accent
+ * against bright surfaces.
+ */
+.light {
+  --background: oklch(0.985 0.003 95);
+  --foreground: oklch(0.22 0.014 245);
+  --card: oklch(1 0 0);
+  --card-foreground: oklch(0.2 0.014 245);
+  --popover: oklch(1 0 0);
+  --popover-foreground: oklch(0.2 0.014 245);
+
+  --primary: oklch(0.22 0.014 245);
+  --primary-foreground: oklch(1 0 0);
+  --secondary: oklch(0.95 0.005 95);
+  --secondary-foreground: oklch(0.22 0.014 245);
+  --muted: oklch(0.95 0.005 95);
+  --muted-foreground: oklch(0.48 0.01 245);
+
+  --accent: oklch(0.68 0.17 60);
+  --accent-foreground: oklch(0.18 0.01 60);
+  --accent-glow: oklch(0.68 0.17 60 / 0.22);
+
+  --cyan: oklch(0.58 0.13 220);
+  --cyan-soft: oklch(0.58 0.13 220 / 0.18);
+
+  --destructive: oklch(0.56 0.22 22);
+  --border: oklch(0 0 0 / 10%);
+  --input: oklch(0.98 0.003 95);
+  --ring: oklch(0.68 0.17 60 / 0.6);
+
+  --chart-1: oklch(0.68 0.17 60);
+  --chart-2: oklch(0.58 0.17 148);
+  --chart-3: oklch(0.52 0.15 250);
+  --chart-4: oklch(0.58 0.2 18);
+  --chart-5: oklch(0.58 0.12 90);
+
+  --sidebar: oklch(0.96 0.005 95);
+  --sidebar-foreground: oklch(0.22 0.014 245);
+  --sidebar-primary: oklch(0.68 0.17 60);
+  --sidebar-primary-foreground: oklch(0.18 0.01 60);
+  --sidebar-accent: oklch(0.92 0.006 95);
+  --sidebar-accent-foreground: oklch(0.22 0.014 245);
+  --sidebar-border: oklch(0 0 0 / 8%);
+  --sidebar-ring: oklch(0.68 0.17 60 / 0.55);
+
+  --status-gray: oklch(0.55 0.01 250);
+  --status-blue: oklch(0.5 0.17 250);
+  --status-amber: oklch(0.68 0.16 68);
+  --status-green: oklch(0.6 0.16 148);
+  --status-red: oklch(0.56 0.22 22);
+  --status-pink: oklch(0.62 0.2 340);
 }
 
 @layer base {
@@ -133,9 +185,15 @@
      * rather than gradient noise.
      */
     background-image:
-      radial-gradient(circle at 100% 0%, oklch(0.78 0.165 68 / 0.07) 0%, transparent 42%),
-      radial-gradient(circle at 0% 100%, oklch(0.78 0.12 210 / 0.05) 0%, transparent 45%);
+      radial-gradient(circle at 100% 0%, var(--accent-glow) 0%, transparent 42%),
+      radial-gradient(circle at 0% 100%, var(--cyan-soft) 0%, transparent 45%);
     background-attachment: fixed;
+  }
+  /* light テーマでは radial の合成がまぶしくなるので少し抑える */
+  .light body {
+    background-image:
+      radial-gradient(circle at 100% 0%, var(--accent-glow) 0%, transparent 50%),
+      radial-gradient(circle at 0% 100%, var(--cyan-soft) 0%, transparent 55%);
   }
   /* Tabular numerals everywhere — data tool convention */
   input,

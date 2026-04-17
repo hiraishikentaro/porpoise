@@ -2,6 +2,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { SavedConnections } from "@/components/SavedConnections";
+import { SettingsModal } from "@/components/SettingsModal";
+import { ShortcutsModal } from "@/components/ShortcutsModal";
 import { SqlEditor } from "@/components/SqlEditor";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
@@ -131,6 +133,8 @@ function App() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editorSeq, setEditorSeq] = useState(1);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [settingsOpen, setSettingsOpen] = useState(false);
+  const [shortcutsOpen, setShortcutsOpen] = useState(false);
 
   useEffect(() => {
     (async () => {
@@ -388,6 +392,22 @@ function App() {
         setPaletteOpen(true);
         return;
       }
+
+      // ⌘/ or ⌘? で shortcuts help modal
+      if (key === "/" || key === "?") {
+        e.preventDefault();
+        e.stopPropagation();
+        setShortcutsOpen((v) => !v);
+        return;
+      }
+
+      // ⌘, で settings (macOS 慣習)
+      if (key === ",") {
+        e.preventDefault();
+        e.stopPropagation();
+        setSettingsOpen((v) => !v);
+        return;
+      }
     }
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
@@ -450,15 +470,26 @@ function App() {
                 Porpoise
               </span>
             </div>
-            <button
-              type="button"
-              onClick={() => setSidebarCollapsed(true)}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-              aria-label="Collapse sidebar"
-              title="Hide connections"
-            >
-              <SidebarCollapseIcon />
-            </button>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => setSettingsOpen(true)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                aria-label="Settings"
+                title="Settings"
+              >
+                <GearIcon />
+              </button>
+              <button
+                type="button"
+                onClick={() => setSidebarCollapsed(true)}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                aria-label="Collapse sidebar"
+                title="Hide connections"
+              >
+                <SidebarCollapseIcon />
+              </button>
+            </div>
           </header>
           <SavedConnections
             refreshKey={refreshKey}
@@ -574,6 +605,10 @@ function App() {
         />
       )}
 
+      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+
+      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+
       {toast && (
         <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-md border border-accent/40 bg-card/90 px-4 py-2 shadow-[0_10px_30px_-10px_oklch(0_0_0/60%),0_0_0_1px_oklch(1_0_0/3%)_inset] backdrop-blur">
           <div className="flex items-center gap-2.5 text-[0.82rem]">
@@ -586,6 +621,21 @@ function App() {
         </div>
       )}
     </main>
+  );
+}
+
+function GearIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" role="img" aria-label="settings" fill="none">
+      <title>settings</title>
+      <circle cx="8" cy="8" r="2.2" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M8 1.5v1.8M8 12.7v1.8M1.5 8h1.8M12.7 8h1.8M3.4 3.4l1.3 1.3M11.3 11.3l1.3 1.3M12.6 3.4l-1.3 1.3M4.7 11.3 3.4 12.6"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+      />
+    </svg>
   );
 }
 

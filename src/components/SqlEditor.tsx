@@ -6,6 +6,7 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
+import { useSettings } from "@/lib/settings";
 import {
   clearQueryHistory,
   deleteSnippet,
@@ -139,6 +140,7 @@ export function SqlEditor({
   const [runState, setRunState] = useState<RunState>({ kind: "idle" });
   const [historyOpen, setHistoryOpen] = useState(false);
   const viewRef = useRef<EditorView | null>(null);
+  const { settings } = useSettings();
 
   // runAt / runAll は keymap に渡すため最新値を ref で保つ
   const sqlTextRef = useRef(sqlText);
@@ -251,7 +253,7 @@ export function SqlEditor({
       formatted = formatSql(current, {
         language: "mysql",
         keywordCase: "upper",
-        tabWidth: 2,
+        tabWidth: settings.tabWidth,
       });
     } catch {
       // パースに失敗したら整形だけスキップ (部分入力中など)
@@ -261,7 +263,7 @@ export function SqlEditor({
       changes: { from: 0, to: view.state.doc.length, insert: formatted },
       selection: { anchor: Math.min(view.state.selection.main.head, formatted.length) },
     });
-  }, []);
+  }, [settings.tabWidth]);
 
   const extensions = useMemo(() => {
     const schemaConfig = schema
