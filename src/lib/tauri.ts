@@ -163,3 +163,25 @@ export function selectTableRows(
     limit,
   });
 }
+
+export type CellChange = {
+  column: string;
+  /** null は NULL を意味する */
+  value: string | null;
+};
+
+export type RowEdit = {
+  database: string;
+  table: string;
+  changes: CellChange[];
+  pk: CellChange[];
+};
+
+export type CommitEditsResult = {
+  affected_rows: number;
+  statements: number;
+};
+
+export function commitEdits(connectionId: string, edits: RowEdit[]): Promise<CommitEditsResult> {
+  return invoke<CommitEditsResult>("commit_edits", { connectionId, edits });
+}

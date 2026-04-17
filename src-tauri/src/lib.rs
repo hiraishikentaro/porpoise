@@ -46,6 +46,7 @@ pub fn run() {
             commands::schema::list_tables,
             commands::schema::describe_table,
             commands::schema::select_table_rows,
+            commands::schema::commit_edits,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

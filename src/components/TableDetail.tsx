@@ -71,6 +71,7 @@ export function TableDetail({ connectionId, database, table, showTabs = true }: 
             connectionId={connectionId}
             database={database}
             table={table}
+            columns={columns}
           />
         ) : (
           <StructureTable loading={loading} columns={columns} />

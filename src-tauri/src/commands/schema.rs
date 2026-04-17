@@ -250,3 +250,112 @@ fn hex_encode(b: &[u8]) -> String {
     }
     out
 }
+
+#[derive(Debug, serde::Deserialize)]
+pub struct CellChange {
+    pub column: String,
+    /// None は NULL を示す。
+    pub value: Option<String>,
+}
+
+#[derive(Debug, serde::Deserialize)]
+pub struct RowEdit {
+    pub database: String,
+    pub table: String,
+    pub changes: Vec<CellChange>,
+    /// 行を特定するための WHERE 句に使う列 (PK / unique)
+    pub pk: Vec<CellChange>,
+}
+
+#[derive(Debug, serde::Serialize)]
+pub struct CommitEditsResult {
+    pub affected_rows: u64,
+    pub statements: u64,
+}
+
+#[tauri::command]
+pub async fn commit_edits(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    edits: Vec<RowEdit>,
+) -> AppResult<CommitEditsResult> {
+    let pool = pool_of(&state, connection_id)?;
+    let mut conn = pool.get_conn().await?;
+
+    use mysql_async::TxOpts;
+    let mut tx = conn.start_transaction(TxOpts::default()).await?;
+
+    let mut affected_total: u64 = 0;
+    let mut statements: u64 = 0;
+
+    for edit in &edits {
+        if edit.changes.is_empty() {
+            continue;
+        }
+        if edit.pk.is_empty() {
+            tx.rollback().await?;
+            return Err(AppError::InvalidData(
+                "row edit without primary key is not allowed".into(),
+            ));
+        }
+
+        let set_clause = edit
+            .changes
+            .iter()
+            .map(|c| format!("{} = ?", quote_ident(&c.column)))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let where_clause = edit
+            .pk
+            .iter()
+            .map(|c| format!("{} <=> ?", quote_ident(&c.column)))
+            .collect::<Vec<_>>()
+            .join(" AND ");
+        let sql = format!(
+            "UPDATE {}.{} SET {} WHERE {}",
+            quote_ident(&edit.database),
+            quote_ident(&edit.table),
+            set_clause,
+            where_clause,
+        );
+
+        let mut params: Vec<mysql_async::Value> = Vec::new();
+        for c in &edit.changes {
+            params.push(value_of(c.value.as_deref()));
+        }
+        for c in &edit.pk {
+            params.push(value_of(c.value.as_deref()));
+        }
+
+        tx.exec_drop(sql.clone(), params).await?;
+        let affected = tx.affected_rows();
+        if affected > 1 {
+            tx.rollback().await?;
+            return Err(AppError::InvalidData(format!(
+                "update affected {} rows (expected <= 1) — PK not unique?",
+                affected
+            )));
+        }
+        affected_total += affected;
+        statements += 1;
+    }
+
+    tx.commit().await?;
+    tracing::info!(
+        %connection_id,
+        statements,
+        affected_total,
+        "commit_edits ok"
+    );
+    Ok(CommitEditsResult {
+        affected_rows: affected_total,
+        statements,
+    })
+}
+
+fn value_of(s: Option<&str>) -> mysql_async::Value {
+    match s {
+        Some(v) => mysql_async::Value::Bytes(v.as_bytes().to_vec()),
+        None => mysql_async::Value::NULL,
+    }
+}
