@@ -23,8 +23,7 @@ pub fn list_query_history(
 ) -> AppResult<QueryHistoryList> {
     let conn = state.local_db.lock().expect("local_db mutex poisoned");
     let take = limit.unwrap_or(DEFAULT_LIMIT).clamp(1, MAX_LIMIT);
-    let items =
-        local_db::list_query_history(&conn, connection_id, search.as_deref(), take)?;
+    let items = local_db::list_query_history(&conn, connection_id, search.as_deref(), take)?;
     Ok(QueryHistoryList { items })
 }
 

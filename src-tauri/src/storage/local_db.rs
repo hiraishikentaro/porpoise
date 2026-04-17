@@ -633,10 +633,7 @@ pub fn get_saved_query(conn: &Connection, id: i64) -> AppResult<Option<SavedQuer
     }
 }
 
-pub fn list_saved_queries(
-    conn: &Connection,
-    connection_id: Uuid,
-) -> AppResult<Vec<SavedQuery>> {
+pub fn list_saved_queries(conn: &Connection, connection_id: Uuid) -> AppResult<Vec<SavedQuery>> {
     let mut stmt = conn.prepare(
         "SELECT id, connection_id, name, sql, created_at, updated_at
          FROM saved_queries WHERE connection_id = ?

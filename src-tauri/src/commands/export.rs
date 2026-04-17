@@ -123,11 +123,7 @@ async fn write_stream<'a>(
                 .ok_or_else(|| AppError::InvalidData("no result set to stream".into()))?;
             while let Some(row_res) = stream.next().await {
                 let row = row_res.map_err(map_mysql_err)?;
-                let cells: Vec<String> = row
-                    .unwrap()
-                    .into_iter()
-                    .map(value_to_csv_cell)
-                    .collect();
+                let cells: Vec<String> = row.unwrap().into_iter().map(value_to_csv_cell).collect();
                 let line = csv_line(&cells);
                 bytes += write_line(&mut writer, &line).await?;
                 count += 1;
@@ -148,8 +144,8 @@ async fn write_stream<'a>(
                     let key = columns.get(i).cloned().unwrap_or_else(|| format!("_{i}"));
                     obj.insert(key, value_to_json(v));
                 }
-                let line =
-                    serde_json::to_string(&serde_json::Value::Object(obj)).unwrap_or_else(|_| "{}".into());
+                let line = serde_json::to_string(&serde_json::Value::Object(obj))
+                    .unwrap_or_else(|_| "{}".into());
                 bytes += write_line(&mut writer, &line).await?;
                 count += 1;
             }

@@ -22,11 +22,7 @@ pub fn preview_csv(path: String, limit: u32) -> AppResult<CsvPreview> {
     let buf = PathBuf::from(&path);
     let file = std::fs::File::open(&buf).map_err(|e| AppError::Io(format!("open {path}: {e}")))?;
     // ファイルサイズから概算
-    let total_bytes = file
-        .metadata()
-        .map(|m| m.len())
-        .ok()
-        .filter(|b| *b > 0);
+    let total_bytes = file.metadata().map(|m| m.len()).ok().filter(|b| *b > 0);
 
     let mut reader = ReaderBuilder::new()
         .has_headers(true)
@@ -106,13 +102,11 @@ pub async fn import_csv(
         .cloned()
         .collect();
     if active_mapping.is_empty() {
-        return Err(AppError::InvalidData(
-            "no columns mapped for import".into(),
-        ));
+        return Err(AppError::InvalidData("no columns mapped for import".into()));
     }
 
-    let file = std::fs::File::open(&path)
-        .map_err(|e| AppError::Io(format!("open csv {path}: {e}")))?;
+    let file =
+        std::fs::File::open(&path).map_err(|e| AppError::Io(format!("open csv {path}: {e}")))?;
     let mut reader = ReaderBuilder::new()
         .has_headers(has_header)
         .flexible(true)
@@ -143,7 +137,8 @@ pub async fn import_csv(
     let pool = pool_of(&state, connection_id)?;
     let mut conn = pool.get_conn().await?;
     // database を USE しておく
-    conn.query_drop(format!("USE {}", quote_ident(&database))).await?;
+    conn.query_drop(format!("USE {}", quote_ident(&database)))
+        .await?;
     let mut tx = conn.start_transaction(TxOpts::default()).await?;
 
     let mut result = ImportResult {
@@ -151,7 +146,8 @@ pub async fn import_csv(
         ..Default::default()
     };
 
-    let mut batch_rows: Vec<mysql_async::Value> = Vec::with_capacity(BATCH_SIZE * active_mapping.len());
+    let mut batch_rows: Vec<mysql_async::Value> =
+        Vec::with_capacity(BATCH_SIZE * active_mapping.len());
     let mut batch_count: usize = 0;
 
     // 行を読んで batch に溜める。batch が満杯になったら flush。
