@@ -150,6 +150,22 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         [],
     )?;
 
+    // 0003: query_history — 実行したクエリのログ (成功/失敗両方)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS query_history (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id TEXT NOT NULL,
+            database TEXT,
+            sql TEXT NOT NULL,
+            executed_at TEXT NOT NULL,
+            duration_ms INTEGER,
+            row_count INTEGER,
+            error TEXT
+        );
+        CREATE INDEX IF NOT EXISTS idx_query_history_conn_time
+          ON query_history (connection_id, executed_at DESC);",
+    )?;
+
     Ok(())
 }
 
@@ -404,4 +420,123 @@ pub fn update(conn: &Connection, id: Uuid, input: NewConnection<'_>) -> AppResul
 
     get(conn, id)?
         .ok_or_else(|| AppError::NotFound(format!("connection {id} not found after update")))
+}
+
+// ---------- query_history ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct QueryHistoryRow {
+    pub id: i64,
+    pub connection_id: Uuid,
+    pub database: Option<String>,
+    pub sql: String,
+    pub executed_at: DateTime<Utc>,
+    pub duration_ms: Option<u64>,
+    pub row_count: Option<i64>,
+    pub error: Option<String>,
+}
+
+pub struct NewQueryHistory<'a> {
+    pub connection_id: Uuid,
+    pub database: Option<&'a str>,
+    pub sql: &'a str,
+    pub duration_ms: Option<u64>,
+    pub row_count: Option<i64>,
+    pub error: Option<&'a str>,
+}
+
+pub fn insert_query_history(conn: &Connection, input: NewQueryHistory<'_>) -> AppResult<i64> {
+    let now = Utc::now().to_rfc3339();
+    conn.execute(
+        "INSERT INTO query_history
+            (connection_id, database, sql, executed_at, duration_ms, row_count, error)
+         VALUES (?, ?, ?, ?, ?, ?, ?)",
+        params![
+            input.connection_id.to_string(),
+            input.database,
+            input.sql,
+            now,
+            input.duration_ms.map(|v| v as i64),
+            input.row_count,
+            input.error,
+        ],
+    )?;
+    Ok(conn.last_insert_rowid())
+}
+
+pub fn list_query_history(
+    conn: &Connection,
+    connection_id: Option<Uuid>,
+    search: Option<&str>,
+    limit: u32,
+) -> AppResult<Vec<QueryHistoryRow>> {
+    // プレースホルダ順を揃えるため WHERE を動的に組む
+    let mut clauses: Vec<&'static str> = Vec::new();
+    let mut args: Vec<Box<dyn rusqlite::ToSql>> = Vec::new();
+
+    let conn_id_str;
+    if let Some(id) = connection_id {
+        conn_id_str = id.to_string();
+        clauses.push("connection_id = ?");
+        args.push(Box::new(conn_id_str.clone()));
+    }
+
+    let like_pattern;
+    if let Some(q) = search.map(str::trim).filter(|s| !s.is_empty()) {
+        like_pattern = format!("%{q}%");
+        clauses.push("sql LIKE ?");
+        args.push(Box::new(like_pattern.clone()));
+    }
+
+    let where_sql = if clauses.is_empty() {
+        String::new()
+    } else {
+        format!(" WHERE {}", clauses.join(" AND "))
+    };
+
+    let sql = format!(
+        "SELECT id, connection_id, database, sql, executed_at, duration_ms, row_count, error
+         FROM query_history{where_sql}
+         ORDER BY executed_at DESC, id DESC
+         LIMIT ?"
+    );
+    args.push(Box::new(i64::from(limit)));
+
+    let mut stmt = conn.prepare(&sql)?;
+    let refs: Vec<&dyn rusqlite::ToSql> = args.iter().map(|b| b.as_ref()).collect();
+    let rows = stmt.query_map(refs.as_slice(), row_to_history)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn clear_query_history(conn: &Connection, connection_id: Option<Uuid>) -> AppResult<u64> {
+    let affected = match connection_id {
+        Some(id) => conn.execute(
+            "DELETE FROM query_history WHERE connection_id = ?",
+            params![id.to_string()],
+        )?,
+        None => conn.execute("DELETE FROM query_history", [])?,
+    };
+    Ok(affected as u64)
+}
+
+fn row_to_history(row: &Row<'_>) -> rusqlite::Result<QueryHistoryRow> {
+    let conn_id_str: String = row.get("connection_id")?;
+    let connection_id = Uuid::parse_str(&conn_id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    let duration_ms: Option<i64> = row.get("duration_ms")?;
+    Ok(QueryHistoryRow {
+        id: row.get("id")?,
+        connection_id,
+        database: row.get("database")?,
+        sql: row.get("sql")?,
+        executed_at: parse_ts(&row.get::<_, String>("executed_at")?)?,
+        duration_ms: duration_ms.map(|v| v.max(0) as u64),
+        row_count: row.get("row_count")?,
+        error: row.get("error")?,
+    })
 }

@@ -265,3 +265,33 @@ export type SchemaSnapshot = {
 export function schemaSnapshot(connectionId: string, database: string): Promise<SchemaSnapshot> {
   return invoke<SchemaSnapshot>("schema_snapshot", { connectionId, database });
 }
+
+export type QueryHistoryRow = {
+  id: number;
+  connection_id: string;
+  database: string | null;
+  sql: string;
+  /** RFC3339 */
+  executed_at: string;
+  duration_ms: number | null;
+  row_count: number | null;
+  error: string | null;
+};
+
+export type QueryHistoryList = { items: QueryHistoryRow[] };
+
+export function listQueryHistory(opts: {
+  connectionId?: string | null;
+  search?: string | null;
+  limit?: number | null;
+}): Promise<QueryHistoryList> {
+  return invoke<QueryHistoryList>("list_query_history", {
+    connectionId: opts.connectionId ?? null,
+    search: opts.search ?? null,
+    limit: opts.limit ?? null,
+  });
+}
+
+export function clearQueryHistory(connectionId: string | null): Promise<number> {
+  return invoke<number>("clear_query_history", { connectionId });
+}

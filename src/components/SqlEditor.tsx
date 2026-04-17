@@ -6,8 +6,11 @@ import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 import {
+  clearQueryHistory,
   executeQuery,
   listDatabases,
+  listQueryHistory,
+  type QueryHistoryRow,
   type QueryResult,
   type SchemaSnapshot,
   schemaSnapshot,
@@ -19,6 +22,8 @@ type Props = {
   initialDatabase: string | null;
   onChange: (sql: string) => void;
   onDatabaseChange: (database: string | null) => void;
+  /** 履歴から SQL を新規エディタタブとして開く */
+  onOpenInNewEditor?: (sql: string, database: string | null) => void;
 };
 
 type RunState =
@@ -117,12 +122,14 @@ export function SqlEditor({
   initialDatabase,
   onChange,
   onDatabaseChange,
+  onOpenInNewEditor,
 }: Props) {
   const [sqlText, setSqlText] = useState(initialSql);
   const [database, setDatabase] = useState<string | null>(initialDatabase);
   const [databases, setDatabases] = useState<string[]>([]);
   const [schema, setSchema] = useState<SchemaSnapshot | null>(null);
   const [runState, setRunState] = useState<RunState>({ kind: "idle" });
+  const [historyOpen, setHistoryOpen] = useState(false);
   const viewRef = useRef<EditorView | null>(null);
 
   // runAt / runAll は keymap に渡すため最新値を ref で保つ
@@ -209,6 +216,22 @@ export function SqlEditor({
     const wrapped = already ? text : `EXPLAIN ${text}`;
     run(wrapped, startLine);
   }, [run]);
+
+  const replaceEditor = useCallback(
+    (sql: string) => {
+      const view = viewRef.current;
+      if (!view) return;
+      view.dispatch({
+        changes: { from: 0, to: view.state.doc.length, insert: sql },
+        selection: { anchor: 0 },
+        scrollIntoView: true,
+      });
+      view.focus();
+      setSqlText(sql);
+      onChange(sql);
+    },
+    [onChange],
+  );
 
   const formatDocument = useCallback(() => {
     const view = viewRef.current;
@@ -317,6 +340,19 @@ export function SqlEditor({
         <div className="flex items-center gap-2">
           <button
             type="button"
+            onClick={() => setHistoryOpen((v) => !v)}
+            className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-xs transition-colors ${
+              historyOpen
+                ? "border-chart-3/60 bg-chart-3/10 text-chart-3"
+                : "border-border text-muted-foreground hover:border-chart-3/50 hover:text-chart-3"
+            }`}
+            title="Toggle query history"
+          >
+            <HistoryIcon />
+            History
+          </button>
+          <button
+            type="button"
             onClick={formatDocument}
             className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
             title="Format SQL (⇧⌘F)"
@@ -351,34 +387,339 @@ export function SqlEditor({
         </div>
       </header>
 
-      <div className="min-h-0 flex-1 overflow-hidden">
-        <CodeMirror
-          value={sqlText}
-          height="100%"
-          theme="dark"
-          extensions={extensions}
-          onChange={(v) => {
-            setSqlText(v);
-            onChange(v);
-          }}
-          onCreateEditor={(view) => {
-            viewRef.current = view;
-          }}
-          basicSetup={{
-            lineNumbers: true,
-            foldGutter: true,
-            highlightActiveLine: true,
-            bracketMatching: true,
-            closeBrackets: true,
-            autocompletion: true,
-            indentOnInput: true,
-          }}
-          className="h-full text-sm"
-        />
-      </div>
+      <div className="flex min-h-0 flex-1 overflow-hidden">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
+          <div className="min-h-0 flex-1 overflow-hidden">
+            <CodeMirror
+              value={sqlText}
+              height="100%"
+              theme="dark"
+              extensions={extensions}
+              onChange={(v) => {
+                setSqlText(v);
+                onChange(v);
+              }}
+              onCreateEditor={(view) => {
+                viewRef.current = view;
+              }}
+              basicSetup={{
+                lineNumbers: true,
+                foldGutter: true,
+                highlightActiveLine: true,
+                bracketMatching: true,
+                closeBrackets: true,
+                autocompletion: true,
+                indentOnInput: true,
+              }}
+              className="h-full text-sm"
+            />
+          </div>
+          <ResultsPane runState={runState} />
+        </div>
 
-      <ResultsPane runState={runState} />
+        {historyOpen && (
+          <HistoryDrawer
+            connectionId={connectionId}
+            runStateKind={runState.kind}
+            onLoad={(sql) => replaceEditor(sql)}
+            onOpenNew={onOpenInNewEditor ? (sql, db) => onOpenInNewEditor(sql, db) : undefined}
+            onClose={() => setHistoryOpen(false)}
+          />
+        )}
+      </div>
     </div>
+  );
+}
+
+function HistoryDrawer({
+  connectionId,
+  runStateKind,
+  onLoad,
+  onOpenNew,
+  onClose,
+}: {
+  connectionId: string;
+  runStateKind: RunState["kind"];
+  onLoad: (sql: string) => void;
+  onOpenNew?: (sql: string, database: string | null) => void;
+  onClose: () => void;
+}) {
+  const [items, setItems] = useState<QueryHistoryRow[]>([]);
+  const [query, setQuery] = useState("");
+  const [scope, setScope] = useState<"connection" | "all">("connection");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+
+  const load = useCallback(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listQueryHistory({
+      connectionId: scope === "connection" ? connectionId : null,
+      search: query.trim() ? query.trim() : null,
+      limit: 200,
+    })
+      .then((res) => {
+        if (!cancelled) setItems(res.items);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId, scope, query]);
+
+  useEffect(() => load(), [load]);
+
+  // クエリ実行が終わったら履歴を更新。runStateKind のみで起動したい
+  // biome-ignore lint/correctness/useExhaustiveDependencies: runStateKind が変わった瞬間だけ load したい
+  useEffect(() => {
+    if (runStateKind === "done" || runStateKind === "error") {
+      load();
+    }
+  }, [runStateKind]);
+
+  async function handleClear() {
+    const label = scope === "connection" ? "this connection" : "all connections";
+    if (!window.confirm(`Clear query history for ${label}?`)) return;
+    try {
+      await clearQueryHistory(scope === "connection" ? connectionId : null);
+      setSelectedId(null);
+      load();
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <aside className="flex h-full w-[340px] shrink-0 flex-col border-l border-border bg-sidebar/30">
+      <header className="flex flex-col gap-2 px-3 pt-2.5 pb-2">
+        <div className="flex items-center justify-between">
+          <span className="tp-section-title">History</span>
+          <div className="flex items-center gap-1">
+            <span className="tp-num text-[0.65rem] text-muted-foreground/60">{items.length}</span>
+            <button
+              type="button"
+              onClick={handleClear}
+              className="rounded-md border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wider text-muted-foreground transition-colors hover:border-destructive/60 hover:text-destructive"
+              title="Clear history"
+            >
+              Clear
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="rounded-md px-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+              aria-label="Close history"
+              title="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </div>
+        <div className="flex h-7 items-center gap-2 rounded-md border border-border bg-input/40 px-2 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_2px_var(--accent-glow)]">
+          <SearchIcon />
+          <input
+            placeholder="Search SQL"
+            value={query}
+            onChange={(e) => setQuery(e.currentTarget.value)}
+            className="h-full flex-1 bg-transparent text-[0.75rem] outline-none placeholder:text-muted-foreground/60"
+          />
+          {query && (
+            <button
+              type="button"
+              onClick={() => setQuery("")}
+              className="text-muted-foreground/50 hover:text-foreground"
+              aria-label="Clear search"
+            >
+              ✕
+            </button>
+          )}
+        </div>
+        <div className="inline-flex w-fit overflow-hidden rounded-md border border-border text-[0.62rem]">
+          <ScopeButton active={scope === "connection"} onClick={() => setScope("connection")}>
+            This conn
+          </ScopeButton>
+          <ScopeButton active={scope === "all"} onClick={() => setScope("all")}>
+            All
+          </ScopeButton>
+        </div>
+      </header>
+      <div className="tp-hair" />
+
+      {error && (
+        <p className="mx-3 my-2 rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-[0.7rem] text-destructive">
+          {error}
+        </p>
+      )}
+
+      <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+        {loading && items.length === 0 && (
+          <li className="px-3 py-2 text-[0.72rem] text-muted-foreground">Loading…</li>
+        )}
+        {!loading && items.length === 0 && (
+          <li className="px-3 py-6 text-center text-[0.72rem] text-muted-foreground/70">
+            No history.
+          </li>
+        )}
+        {items.map((it) => {
+          const isSelected = selectedId === it.id;
+          const hasError = Boolean(it.error);
+          return (
+            <li key={it.id}>
+              <div
+                className={`group relative flex flex-col gap-0.5 px-3 py-1.5 transition-colors ${
+                  isSelected
+                    ? "bg-accent/10 shadow-[inset_2px_0_0_var(--accent)]"
+                    : "hover:bg-sidebar-accent/40"
+                }`}
+              >
+                <button
+                  type="button"
+                  onClick={() => setSelectedId(it.id)}
+                  onDoubleClick={() => onLoad(it.sql)}
+                  className="flex w-full flex-col gap-0.5 text-left"
+                  title="click: select · double-click: load into editor"
+                >
+                  <div className="flex items-baseline justify-between gap-2">
+                    <span className="truncate font-mono text-[0.72rem] text-foreground/90">
+                      {firstLine(it.sql)}
+                    </span>
+                    {hasError ? (
+                      <span className="tp-chip-accent shrink-0 bg-destructive/20 text-destructive">
+                        err
+                      </span>
+                    ) : it.row_count != null ? (
+                      <span className="shrink-0 font-mono text-[0.6rem] text-muted-foreground/70">
+                        {it.row_count}
+                      </span>
+                    ) : null}
+                  </div>
+                  <div className="flex items-center gap-1.5 text-[0.6rem] text-muted-foreground/60">
+                    <span className="tp-num">{formatRelative(it.executed_at)}</span>
+                    {it.database && <span className="truncate font-mono">{it.database}</span>}
+                    {it.duration_ms != null && (
+                      <span className="ml-auto tp-num">{it.duration_ms}ms</span>
+                    )}
+                  </div>
+                </button>
+                {isSelected && (
+                  <div className="mt-1 flex items-center gap-1">
+                    <button
+                      type="button"
+                      onClick={() => onLoad(it.sql)}
+                      className="tp-btn tp-btn-primary h-6 px-2 text-[0.62rem]"
+                      title="Replace current editor contents"
+                    >
+                      Load
+                    </button>
+                    {onOpenNew && (
+                      <button
+                        type="button"
+                        onClick={() => onOpenNew(it.sql, it.database)}
+                        className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.62rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent"
+                        title="Open in a new editor tab"
+                      >
+                        New tab
+                      </button>
+                    )}
+                  </div>
+                )}
+                {hasError && isSelected && it.error && (
+                  <pre className="mt-1 max-h-24 overflow-auto rounded-sm border border-destructive/30 bg-destructive/10 p-1.5 font-mono text-[0.62rem] text-destructive">
+                    {it.error}
+                  </pre>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </aside>
+  );
+}
+
+function ScopeButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2 py-0.5 font-semibold uppercase tracking-wider transition-colors ${
+        active
+          ? "bg-foreground text-background"
+          : "bg-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function firstLine(sql: string): string {
+  const stripped = sql.replace(/\s+/g, " ").trim();
+  return stripped.length > 80 ? `${stripped.slice(0, 80)}…` : stripped;
+}
+
+function formatRelative(iso: string): string {
+  try {
+    const d = new Date(iso);
+    const diff = Date.now() - d.getTime();
+    const sec = Math.floor(diff / 1000);
+    if (sec < 60) return `${sec}s`;
+    const min = Math.floor(sec / 60);
+    if (min < 60) return `${min}m`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h`;
+    const day = Math.floor(hr / 24);
+    if (day < 30) return `${day}d`;
+    return d.toLocaleDateString();
+  } catch {
+    return iso;
+  }
+}
+
+function HistoryIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3 w-3" role="img" aria-label="history" fill="none">
+      <title>history</title>
+      <circle cx="8" cy="8" r="5.5" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="M8 5v3l2 1.5"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SearchIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3 w-3 text-muted-foreground/60"
+      role="img"
+      aria-label="search"
+      fill="none"
+    >
+      <title>search</title>
+      <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
+      <path d="m11 11 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
   );
 }
 
@@ -433,7 +774,6 @@ function ResultsPane({ runState }: { runState: RunState }) {
           </thead>
           <tbody>
             {r.rows.map((row, i) => {
-              // biome-ignore lint/suspicious/noArrayIndexKey: query rows are positional only
               const rowKey = `row-${i}`;
               return (
                 <tr key={rowKey} className="border-b border-border/30 hover:bg-sidebar-accent/30">

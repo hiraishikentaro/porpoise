@@ -71,14 +71,11 @@ function App() {
   }, []);
 
   const openEditorTab = useCallback(
-    (conn: SavedConnection, database: string | null) => {
+    (conn: SavedConnection, database: string | null, sql = "") => {
       const id = newEditorTabId();
       const title = `Query ${editorSeq}`;
       setEditorSeq((v) => v + 1);
-      setTabs((prev) => [
-        ...prev,
-        { id, kind: "editor", connection: conn, title, sql: "", database },
-      ]);
+      setTabs((prev) => [...prev, { id, kind: "editor", connection: conn, title, sql, database }]);
       setActiveTabId(id);
     },
     [editorSeq],
@@ -206,20 +203,35 @@ function App() {
     <main className="flex h-screen overflow-hidden">
       {!sidebarCollapsed && (
         <aside className="flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-          <header className="flex items-center justify-between border-b border-sidebar-border px-4 py-3">
+          <header className="flex h-12 items-center justify-between border-b border-sidebar-border/70 px-3">
             <button
               type="button"
               onClick={handleNewTab}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sidebar-border text-lg text-sidebar-foreground transition-colors hover:border-accent hover:text-accent"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-sidebar-border text-sidebar-foreground/90 transition-colors hover:border-accent hover:text-accent"
               aria-label="New connection"
+              title="New connection"
             >
-              +
+              <PlusIcon />
             </button>
-            <span className="text-sm font-semibold tracking-tight">Porpoise</span>
+            <div className="flex items-center gap-1.5">
+              <span
+                aria-hidden
+                className="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_1px_var(--accent-glow)]"
+              />
+              <span
+                className="text-[0.85rem] tracking-tight"
+                style={{
+                  fontFamily: "var(--font-display)",
+                  fontVariationSettings: '"SOFT" 50, "wght" 520, "opsz" 24',
+                }}
+              >
+                Porpoise
+              </span>
+            </div>
             <button
               type="button"
               onClick={() => setSidebarCollapsed(true)}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
               aria-label="Collapse sidebar"
               title="Hide connections"
             >
@@ -282,27 +294,51 @@ function App() {
               initialDatabase={activeTab.database}
               onChange={(sql) => updateEditorSql(activeTab.id, sql)}
               onDatabaseChange={(db) => updateEditorDatabase(activeTab.id, db)}
+              onOpenInNewEditor={(sql, db) => openEditorTab(activeTab.connection, db, sql)}
             />
           ) : (
-            <div className="flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
-              <ConnectionForm initial={selected} onSaved={handleSaved} onOpened={handleOpened} />
+            <div className="relative flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
+              {/* Atmospheric backdrop */}
+              <div
+                aria-hidden
+                className="pointer-events-none absolute inset-0 opacity-[0.35]"
+                style={{
+                  backgroundImage:
+                    "linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)",
+                  backgroundSize: "32px 32px",
+                  maskImage:
+                    "radial-gradient(ellipse 80% 60% at 50% 35%, black 30%, transparent 75%)",
+                }}
+              />
+              <div className="relative z-10 w-full max-w-3xl">
+                <ConnectionForm initial={selected} onSaved={handleSaved} onOpened={handleOpened} />
+              </div>
             </div>
           )}
         </div>
       </section>
 
       {toast && (
-        <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 rounded-md border border-accent/40 bg-card px-4 py-2 shadow-lg">
-          <div className="flex items-center gap-2 text-sm">
+        <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-md border border-accent/40 bg-card/90 px-4 py-2 shadow-[0_10px_30px_-10px_oklch(0_0_0/60%),0_0_0_1px_oklch(1_0_0/3%)_inset] backdrop-blur">
+          <div className="flex items-center gap-2.5 text-[0.82rem]">
             <span
               aria-hidden
-              className="inline-block h-2 w-2 rounded-full bg-accent shadow-[0_0_0_3px_oklch(0.72_0.15_55/0.25)]"
+              className="inline-block h-2 w-2 rounded-full bg-accent shadow-[0_0_0_3px_var(--accent-glow),0_0_10px_2px_var(--accent-glow)]"
             />
             <span className="text-foreground">{toast}</span>
           </div>
         </div>
       )}
     </main>
+  );
+}
+
+function PlusIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" role="img" aria-label="plus" fill="none">
+      <title>add</title>
+      <path d="M8 3.5v9M3.5 8h9" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+    </svg>
   );
 }
 

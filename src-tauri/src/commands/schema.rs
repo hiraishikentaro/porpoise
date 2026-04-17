@@ -371,16 +371,48 @@ pub async fn execute_query(
     database: Option<String>,
 ) -> AppResult<QueryResult> {
     let pool = pool_of(&state, connection_id)?;
+
+    let start = std::time::Instant::now();
+    let outcome = execute_query_inner(&pool, &sql, database.as_deref(), start).await;
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+
+    // 履歴は成功/失敗の両方で残す。書き込み失敗はログに落として握りつぶす
+    // (履歴保存がアプリの主機能を阻害しないように)
+    let (row_count, error_msg): (Option<i64>, Option<String>) = match &outcome {
+        Ok(QueryResult::Select { returned, .. }) => (Some(*returned as i64), None),
+        Ok(QueryResult::Affected { rows, .. }) => (Some(*rows as i64), None),
+        Err(e) => (None, Some(e.to_string())),
+    };
+    if let Err(e) = record_history(
+        &state,
+        connection_id,
+        database.as_deref(),
+        &sql,
+        elapsed_ms,
+        row_count,
+        error_msg.as_deref(),
+    ) {
+        tracing::warn!(error = %e, "failed to record query history");
+    }
+
+    outcome
+}
+
+async fn execute_query_inner(
+    pool: &Pool,
+    sql: &str,
+    database: Option<&str>,
+    start: std::time::Instant,
+) -> AppResult<QueryResult> {
     let mut conn = pool.get_conn().await?;
 
     // 明示的な DB 指定があれば USE で切り替える。失敗したらそのままエラーを返す。
-    if let Some(db) = database.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+    if let Some(db) = database.map(str::trim).filter(|s| !s.is_empty()) {
         let use_sql = format!("USE {}", quote_ident(db));
         conn.query_drop(use_sql).await?;
     }
 
-    let start = std::time::Instant::now();
-    let result = conn.query_iter(sql).await?;
+    let result = conn.query_iter(sql.to_string()).await?;
     let columns_opt = result.columns();
     let columns: Vec<String> = columns_opt
         .as_ref()
@@ -399,12 +431,7 @@ pub async fn execute_query(
             .into_iter()
             .map(|row| row.unwrap().into_iter().map(value_to_display).collect())
             .collect();
-        tracing::info!(
-            %connection_id,
-            returned,
-            elapsed_ms,
-            "execute_query (select) ok"
-        );
+        tracing::info!(returned, elapsed_ms, "execute_query (select) ok");
         Ok(QueryResult::Select {
             columns,
             rows: cells,
@@ -412,17 +439,37 @@ pub async fn execute_query(
             elapsed_ms,
         })
     } else {
-        tracing::info!(
-            %connection_id,
-            affected,
-            elapsed_ms,
-            "execute_query (dml) ok"
-        );
+        tracing::info!(affected, elapsed_ms, "execute_query (dml) ok");
         Ok(QueryResult::Affected {
             rows: affected,
             elapsed_ms,
         })
     }
+}
+
+fn record_history(
+    state: &State<'_, AppState>,
+    connection_id: Uuid,
+    database: Option<&str>,
+    sql: &str,
+    elapsed_ms: u64,
+    row_count: Option<i64>,
+    error: Option<&str>,
+) -> AppResult<()> {
+    use crate::storage::local_db::{self, NewQueryHistory};
+    let db = state.local_db.lock().expect("local_db mutex poisoned");
+    local_db::insert_query_history(
+        &db,
+        NewQueryHistory {
+            connection_id,
+            database,
+            sql,
+            duration_ms: Some(elapsed_ms),
+            row_count,
+            error,
+        },
+    )?;
+    Ok(())
 }
 
 /// mysql_async::Value → 表示用の文字列 (NULL は None)。
