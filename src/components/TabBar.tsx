@@ -25,14 +25,7 @@ export type EditorTab = {
   database: string | null;
 };
 
-export type ErTab = {
-  id: string;
-  kind: "er";
-  connection: SavedConnection;
-  database: string;
-};
-
-export type Tab = ConnectionTab | TableTab | EditorTab | ErTab;
+export type Tab = ConnectionTab | TableTab | EditorTab;
 
 type Props = {
   tabs: Tab[];
@@ -180,16 +173,13 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
                 <ConnectionBadge connection={tab.connection} />
                 {tab.kind === "table" && <TableBadge />}
                 {tab.kind === "editor" && <QueryBadge />}
-                {tab.kind === "er" && <ErBadge />}
                 <span className="flex min-w-0 flex-1 flex-col items-start overflow-hidden leading-tight">
                   <span className="w-full truncate text-[0.82rem] tracking-tight">
                     {tab.kind === "connection"
                       ? tab.connection.name
                       : tab.kind === "table"
                         ? tab.table
-                        : tab.kind === "editor"
-                          ? tab.title
-                          : `ER · ${tab.database}`}
+                        : tab.title}
                   </span>
                   {tab.kind === "table" && (
                     <span className="w-full truncate font-mono text-[0.6rem] text-muted-foreground/60">
@@ -200,11 +190,6 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
                     <span className="w-full truncate font-mono text-[0.6rem] text-muted-foreground/60">
                       {tab.connection.name}
                       {tab.database && ` · ${tab.database}`}
-                    </span>
-                  )}
-                  {tab.kind === "er" && (
-                    <span className="w-full truncate font-mono text-[0.6rem] text-muted-foreground/60">
-                      {tab.connection.name}
                     </span>
                   )}
                 </span>
@@ -274,17 +259,6 @@ function QueryBadge() {
       style={{ fontFamily: "var(--font-mono)" }}
     >
       SQL
-    </span>
-  );
-}
-
-function ErBadge() {
-  return (
-    <span
-      className="inline-flex h-5 min-w-5 shrink-0 items-center justify-center rounded-[4px] border border-chart-2/50 bg-chart-2/10 px-1 text-[0.55rem] font-bold tracking-wider text-chart-2"
-      style={{ fontFamily: "var(--font-mono)" }}
-    >
-      ER
     </span>
   );
 }

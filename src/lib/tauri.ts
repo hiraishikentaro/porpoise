@@ -274,36 +274,6 @@ export function schemaSnapshot(connectionId: string, database: string): Promise<
   return invoke<SchemaSnapshot>("schema_snapshot", { connectionId, database });
 }
 
-export type ErColumn = {
-  name: string;
-  data_type: string;
-  nullable: boolean;
-  is_pk: boolean;
-};
-
-export type ErTable = {
-  name: string;
-  columns: ErColumn[];
-};
-
-export type ErForeignKey = {
-  constraint: string;
-  src_table: string;
-  src_columns: string[];
-  ref_table: string;
-  ref_columns: string[];
-};
-
-export type ErSchema = {
-  database: string;
-  tables: ErTable[];
-  foreign_keys: ErForeignKey[];
-};
-
-export function erSchema(connectionId: string, database: string): Promise<ErSchema> {
-  return invoke<ErSchema>("er_schema", { connectionId, database });
-}
-
 export type QueryHistoryRow = {
   id: number;
   connection_id: string;

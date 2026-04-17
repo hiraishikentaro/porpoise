@@ -9,11 +9,9 @@ type Props = {
   onOpenTable: (connection: SavedConnection, database: string, table: string) => void;
   /** SQL クエリタブを新規で開く (現在選択中の DB をデフォルトに) */
   onNewQuery: (connection: SavedConnection, database: string | null) => void;
-  /** 選択中の DB で ER 図タブを開く */
-  onOpenEr: (connection: SavedConnection, database: string) => void;
 };
 
-export function DatabaseBrowser({ connection, onOpenTable, onNewQuery, onOpenEr }: Props) {
+export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -178,16 +176,6 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery, onOpenEr 
               )}
             </div>
             <div className="flex items-center gap-2">
-              <button
-                type="button"
-                onClick={() => selectedDb && onOpenEr(connection, selectedDb)}
-                disabled={!selectedDb}
-                className="inline-flex items-center gap-1 rounded-sm border border-chart-2/50 bg-chart-2/10 px-1.5 py-0.5 text-[0.6rem] font-semibold uppercase tracking-[0.08em] text-chart-2 transition-colors hover:bg-chart-2 hover:text-background disabled:opacity-50"
-                title="Open ER diagram for this database"
-                style={{ fontFamily: "var(--font-mono)" }}
-              >
-                ER
-              </button>
               <button
                 type="button"
                 onClick={() => onNewQuery(connection, selectedDb)}

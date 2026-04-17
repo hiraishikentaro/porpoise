@@ -50,7 +50,6 @@ pub fn run() {
             commands::schema::commit_changes,
             commands::schema::execute_query,
             commands::schema::schema_snapshot,
-            commands::schema::er_schema,
             commands::history::list_query_history,
             commands::history::clear_query_history,
             commands::snippets::save_snippet,

@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
-import { ErDiagram } from "@/components/ErDiagram";
 import { SavedConnections } from "@/components/SavedConnections";
 import { SqlEditor } from "@/components/SqlEditor";
 import { type Tab, TabBar } from "@/components/TabBar";
@@ -16,7 +15,6 @@ import {
 const connectionTabId = (connId: string) => `conn:${connId}`;
 const tableTabId = (connId: string, database: string, table: string) =>
   `table:${connId}:${database}:${table}`;
-const erTabId = (connId: string, database: string) => `er:${connId}:${database}`;
 const newEditorTabId = () =>
   `editor:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
@@ -32,8 +30,7 @@ type PersistedTab =
       title: string;
       sql: string;
       database: string | null;
-    }
-  | { id: string; kind: "er"; connectionId: string; database: string };
+    };
 
 type PersistedState = {
   tabs: PersistedTab[];
@@ -66,14 +63,6 @@ function serializeTabs(tabs: Tab[], activeTabId: string | null, editorSeq: numbe
           connectionId: t.connection.id,
           database: t.database,
           table: t.table,
-        };
-      }
-      if (t.kind === "er") {
-        return {
-          id: t.id,
-          kind: "er",
-          connectionId: t.connection.id,
-          database: t.database,
         };
       }
       return {
@@ -111,13 +100,6 @@ function hydrateTabs(
         connection: conn,
         database: p.database,
         table: p.table,
-      });
-    } else if (p.kind === "er") {
-      restored.push({
-        id: p.id,
-        kind: "er",
-        connection: conn,
-        database: p.database,
       });
     } else {
       restored.push({
@@ -190,14 +172,18 @@ function App() {
     })();
   }, []);
 
-  // 変更のたびに localStorage に保存 (render 中ではないので useEffect で debounce 不要)
+  // 変更のたびに localStorage に保存。SQL エディタの打鍵など高頻度更新で
+  // JSON.stringify + setItem が走り続けないよう 500ms debounce する。
   useEffect(() => {
-    try {
-      const serialized = serializeTabs(tabs, activeTabId, editorSeq);
-      localStorage.setItem(PERSIST_KEY, JSON.stringify(serialized));
-    } catch {
-      // noop — quota exceeded などは無視
-    }
+    const handle = window.setTimeout(() => {
+      try {
+        const serialized = serializeTabs(tabs, activeTabId, editorSeq);
+        localStorage.setItem(PERSIST_KEY, JSON.stringify(serialized));
+      } catch {
+        // noop — quota exceeded などは無視
+      }
+    }, 500);
+    return () => window.clearTimeout(handle);
   }, [tabs, activeTabId, editorSeq]);
 
   const upsertConnectionTab = useCallback((conn: SavedConnection) => {
@@ -219,15 +205,6 @@ function App() {
     setTabs((prev) => {
       if (prev.some((t) => t.id === id)) return prev;
       return [...prev, { id, kind: "table", connection: conn, database, table }];
-    });
-    setActiveTabId(id);
-  }, []);
-
-  const openErTab = useCallback((conn: SavedConnection, database: string) => {
-    const id = erTabId(conn.id, database);
-    setTabs((prev) => {
-      if (prev.some((t) => t.id === id)) return prev;
-      return [...prev, { id, kind: "er", connection: conn, database }];
     });
     setActiveTabId(id);
   }, []);
@@ -401,7 +378,6 @@ function App() {
     activeTab?.kind === "connection" && activeIds.has(activeTab.connection.id);
   const tableTabActive = activeTab?.kind === "table" && activeIds.has(activeTab.connection.id);
   const editorTabActive = activeTab?.kind === "editor" && activeIds.has(activeTab.connection.id);
-  const erTabActive = activeTab?.kind === "er" && activeIds.has(activeTab.connection.id);
 
   return (
     <main className="flex h-screen overflow-hidden">
@@ -483,7 +459,6 @@ function App() {
               connection={activeTab.connection}
               onOpenTable={handleOpenTableInTab}
               onNewQuery={openEditorTab}
-              onOpenEr={openErTab}
             />
           ) : tableTabActive && activeTab?.kind === "table" ? (
             <TableDetail
@@ -501,12 +476,6 @@ function App() {
               onChange={(sql) => updateEditorSql(activeTab.id, sql)}
               onDatabaseChange={(db) => updateEditorDatabase(activeTab.id, db)}
               onOpenInNewEditor={(sql, db) => openEditorTab(activeTab.connection, db, sql)}
-            />
-          ) : erTabActive && activeTab?.kind === "er" ? (
-            <ErDiagram
-              key={activeTab.id}
-              connectionId={activeTab.connection.id}
-              database={activeTab.database}
             />
           ) : (
             <div className="relative flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
