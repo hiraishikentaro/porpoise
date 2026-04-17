@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { colorForName, initialsOf, ringColorFor, statusColorVars } from "@/lib/status-color";
 import type { SavedConnection } from "@/lib/tauri";
 
@@ -43,39 +43,79 @@ type DragState = {
   position: "before" | "after" | null;
 };
 
+/** 何px動いたら drag を開始するか。クリックと drag を分岐するための閾値 */
+const DRAG_THRESHOLD = 4;
+
 export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder }: Props) {
   const [drag, setDrag] = useState<DragState | null>(null);
+  const tabRefs = useRef<Map<string, HTMLElement>>(new Map());
 
-  function handleDragStart(e: React.DragEvent, id: string) {
-    e.dataTransfer.setData("text/plain", id);
-    e.dataTransfer.effectAllowed = "move";
-    setDrag({ draggingId: id, overId: null, position: null });
-  }
+  const setTabRef = useCallback((id: string, el: HTMLElement | null) => {
+    if (el) tabRefs.current.set(id, el);
+    else tabRefs.current.delete(id);
+  }, []);
 
-  function handleDragOver(e: React.DragEvent, id: string) {
-    if (!drag || drag.draggingId === id) return;
+  function handlePointerDown(e: React.PointerEvent, id: string) {
+    // 左クリックのみ。close ボタンなど data-no-drag 配下からの発火は無視
+    if (e.button !== 0) return;
+    const target = e.target as HTMLElement;
+    if (target.closest("[data-no-drag]")) return;
+
     e.preventDefault();
-    e.dataTransfer.dropEffect = "move";
-    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
-    const mid = rect.left + rect.width / 2;
-    const position: "before" | "after" = e.clientX < mid ? "before" : "after";
-    if (drag.overId !== id || drag.position !== position) {
-      setDrag({ ...drag, overId: id, position });
+    const startX = e.clientX;
+    let started = false;
+    let current: DragState | null = null;
+
+    function computeOver(clientX: number): {
+      overId: string | null;
+      position: "before" | "after" | null;
+    } {
+      for (const [tabId, el] of tabRefs.current.entries()) {
+        if (tabId === id) continue;
+        const rect = el.getBoundingClientRect();
+        if (clientX >= rect.left && clientX <= rect.right) {
+          const position: "before" | "after" =
+            clientX < rect.left + rect.width / 2 ? "before" : "after";
+          return { overId: tabId, position };
+        }
+      }
+      return { overId: null, position: null };
     }
-  }
 
-  function handleDrop(e: React.DragEvent, id: string) {
-    e.preventDefault();
-    if (!drag || drag.draggingId === id || !drag.position) {
+    function handleMove(ev: PointerEvent) {
+      if (!started && Math.abs(ev.clientX - startX) >= DRAG_THRESHOLD) {
+        started = true;
+        current = { draggingId: id, overId: null, position: null };
+        setDrag(current);
+      }
+      if (started) {
+        const { overId, position } = computeOver(ev.clientX);
+        if (!current) return;
+        if (current.overId !== overId || current.position !== position) {
+          current = { ...current, overId, position };
+          setDrag(current);
+        }
+      }
+    }
+
+    function handleUp() {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+      if (started) {
+        if (current?.overId && current.position) {
+          onReorder(current.draggingId, current.overId, current.position);
+        }
+      } else {
+        // drag しなかったので通常の click と扱ってタブを選択
+        onSelect(id);
+      }
       setDrag(null);
-      return;
     }
-    onReorder(drag.draggingId, id, drag.position);
-    setDrag(null);
-  }
 
-  function handleDragEnd() {
-    setDrag(null);
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
   }
 
   return (
@@ -91,15 +131,12 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
           return (
             <div
               key={tab.id}
+              ref={(el) => setTabRef(tab.id, el)}
               role="tab"
               aria-selected={active}
               tabIndex={-1}
-              draggable
-              onDragStart={(e) => handleDragStart(e, tab.id)}
-              onDragOver={(e) => handleDragOver(e, tab.id)}
-              onDrop={(e) => handleDrop(e, tab.id)}
-              onDragEnd={handleDragEnd}
-              className={`group relative flex h-full max-w-[320px] shrink-0 items-stretch overflow-hidden border-r border-border/70 transition-colors ${
+              onPointerDown={(e) => handlePointerDown(e, tab.id)}
+              className={`group relative flex h-full max-w-[320px] shrink-0 cursor-pointer items-stretch overflow-hidden border-r border-border/70 select-none transition-colors ${
                 active
                   ? "bg-background text-foreground"
                   : "bg-transparent text-muted-foreground hover:bg-sidebar-accent/30 hover:text-foreground"
@@ -132,11 +169,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
                 />
               )}
 
-              <button
-                type="button"
-                onClick={() => onSelect(tab.id)}
-                className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pr-1 pl-3 text-sm"
-              >
+              <div className="flex min-w-0 flex-1 items-center gap-2 overflow-hidden pr-1 pl-3 text-sm">
                 <ConnectionBadge connection={tab.connection} />
                 {tab.kind === "table" && <TableBadge />}
                 {tab.kind === "editor" && <QueryBadge />}
@@ -160,9 +193,10 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
                     </span>
                   )}
                 </span>
-              </button>
+              </div>
               <button
                 type="button"
+                data-no-drag
                 onClick={(e) => {
                   e.stopPropagation();
                   onClose(tab.id);
