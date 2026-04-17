@@ -31,6 +31,7 @@ type FormValues = {
   sslClientCertPath: string;
   sslClientKeyPath: string;
   enableCleartextPlugin: boolean;
+  historyEnabled: boolean;
   sshEnabled: boolean;
   sshHost: string;
   sshPort: number;
@@ -59,6 +60,7 @@ const defaultValues: FormValues = {
   sslClientCertPath: "",
   sslClientKeyPath: "",
   enableCleartextPlugin: false,
+  historyEnabled: true,
   sshEnabled: false,
   sshHost: "",
   sshPort: 22,
@@ -97,6 +99,7 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
         sslClientCertPath: initial.ssl.client_cert_path ?? "",
         sslClientKeyPath: initial.ssl.client_key_path ?? "",
         enableCleartextPlugin: initial.enable_cleartext_plugin,
+        historyEnabled: initial.history_enabled,
         sshEnabled: initial.ssh !== null,
         sshHost: initial.ssh?.host ?? "",
         sshPort: initial.ssh?.port ?? 22,
@@ -174,9 +177,14 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
         ssl: config.ssl,
         ssh: config.ssh,
         enable_cleartext_plugin: config.enable_cleartext_plugin,
+        history_enabled: values.historyEnabled,
       });
     }
-    return await saveConnection({ ...config, name: values.name.trim() });
+    return await saveConnection({
+      ...config,
+      name: values.name.trim(),
+      history_enabled: values.historyEnabled,
+    });
   }
 
   async function handleSave() {
@@ -336,6 +344,21 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
             />
             <span>Enable Cleartext plugin</span>
             <span className="text-xs text-muted-foreground">(insecure — LDAP/PAM 用)</span>
+          </label>
+        </Row>
+
+        <Row label="Privacy">
+          <label className="flex items-center gap-2 py-1 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-accent"
+              checked={values.historyEnabled}
+              onChange={(e) => update("historyEnabled", e.currentTarget.checked)}
+            />
+            <span>Record query history</span>
+            <span className="text-xs text-muted-foreground">
+              (off にするとこの接続のクエリ履歴を保存しません)
+            </span>
           </label>
         </Row>
 

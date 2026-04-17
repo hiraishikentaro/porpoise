@@ -92,6 +92,8 @@ pub struct SavedConnection {
     pub ssl: SavedSslConfig,
     pub ssh: Option<SavedSshConfig>,
     pub enable_cleartext_plugin: bool,
+    /// クエリ履歴の自動保存を有効にするかどうか (プライバシー設定)
+    pub history_enabled: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -134,6 +136,7 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         ("ssh_auth_kind", "TEXT"),
         ("ssh_key_path", "TEXT"),
         ("enable_cleartext_plugin", "INTEGER NOT NULL DEFAULT 0"),
+        ("history_enabled", "INTEGER NOT NULL DEFAULT 1"),
     ];
     for (name, decl) in additions {
         if !existing_cols.iter().any(|c| c == name) {
@@ -166,6 +169,20 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
           ON query_history (connection_id, executed_at DESC);",
     )?;
 
+    // 0004: saved_queries — 名前付きスニペット (per-connection)
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS saved_queries (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            connection_id TEXT NOT NULL,
+            name TEXT NOT NULL,
+            sql TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_saved_queries_conn_name
+          ON saved_queries (connection_id, name);",
+    )?;
+
     Ok(())
 }
 
@@ -185,6 +202,7 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
     let ssl_mode: String = row.get("ssl_mode")?;
     let ssh_enabled: i64 = row.get("ssh_enabled")?;
     let enable_cleartext: i64 = row.get("enable_cleartext_plugin")?;
+    let history_enabled: i64 = row.get("history_enabled")?;
     let ssh = if ssh_enabled != 0 {
         let ssh_host: Option<String> = row.get("ssh_host")?;
         let ssh_port: Option<i64> = row.get("ssh_port")?;
@@ -241,6 +259,7 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
         },
         ssh,
         enable_cleartext_plugin: enable_cleartext != 0,
+        history_enabled: history_enabled != 0,
         created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
         updated_at: parse_ts(&row.get::<_, String>("updated_at")?)?,
     })
@@ -263,6 +282,7 @@ pub struct NewConnection<'a> {
     pub ssl: SavedSslConfig,
     pub ssh: Option<SavedSshConfig>,
     pub enable_cleartext_plugin: bool,
+    pub history_enabled: bool,
 }
 
 pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedConnection> {
@@ -279,8 +299,9 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
             (id, name, host, port, username, database, use_ssl,
              ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
              ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
+             enable_cleartext_plugin, history_enabled,
              created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?,  ?, ?)",
         params![
             id.to_string(),
             input.name,
@@ -305,6 +326,8 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
             input.ssh.as_ref().map(|s| &s.user),
             input.ssh.as_ref().map(|s| s.auth_kind.as_str()),
             input.ssh.as_ref().and_then(|s| s.key_path.clone()),
+            i64::from(input.enable_cleartext_plugin),
+            i64::from(input.history_enabled),
             now_str,
             now_str,
         ],
@@ -320,6 +343,7 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
         ssl: input.ssl,
         ssh: input.ssh,
         enable_cleartext_plugin: input.enable_cleartext_plugin,
+        history_enabled: input.history_enabled,
         created_at: now,
         updated_at: now,
     })
@@ -330,7 +354,7 @@ pub fn get(conn: &Connection, id: Uuid) -> AppResult<Option<SavedConnection>> {
         "SELECT id, name, host, port, username, database,
                 ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
                 ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
-                enable_cleartext_plugin,
+                enable_cleartext_plugin, history_enabled,
                 created_at, updated_at
          FROM saved_connections
          WHERE id = ?",
@@ -348,7 +372,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<SavedConnection>> {
         "SELECT id, name, host, port, username, database,
                 ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
                 ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
-                enable_cleartext_plugin,
+                enable_cleartext_plugin, history_enabled,
                 created_at, updated_at
          FROM saved_connections
          ORDER BY created_at ASC",
@@ -384,6 +408,7 @@ pub fn update(conn: &Connection, id: Uuid, input: NewConnection<'_>) -> AppResul
             ssh_enabled = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?,
             ssh_auth_kind = ?, ssh_key_path = ?,
             enable_cleartext_plugin = ?,
+            history_enabled = ?,
             updated_at = ?
          WHERE id = ?",
         params![
@@ -410,6 +435,7 @@ pub fn update(conn: &Connection, id: Uuid, input: NewConnection<'_>) -> AppResul
             input.ssh.as_ref().map(|s| s.auth_kind.as_str()),
             input.ssh.as_ref().and_then(|s| s.key_path.clone()),
             i64::from(input.enable_cleartext_plugin),
+            i64::from(input.history_enabled),
             now_str,
             id.to_string(),
         ],
@@ -521,6 +547,117 @@ pub fn clear_query_history(conn: &Connection, connection_id: Option<Uuid>) -> Ap
         None => conn.execute("DELETE FROM query_history", [])?,
     };
     Ok(affected as u64)
+}
+
+// ---------- saved_queries (snippets) ----------
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct SavedQuery {
+    pub id: i64,
+    pub connection_id: Uuid,
+    pub name: String,
+    pub sql: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+pub fn insert_saved_query(
+    conn: &Connection,
+    connection_id: Uuid,
+    name: &str,
+    sql: &str,
+) -> AppResult<SavedQuery> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidData("snippet name is empty".into()));
+    }
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+    conn.execute(
+        "INSERT INTO saved_queries (connection_id, name, sql, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?)",
+        params![connection_id.to_string(), trimmed, sql, now_str, now_str],
+    )?;
+    Ok(SavedQuery {
+        id: conn.last_insert_rowid(),
+        connection_id,
+        name: trimmed.to_owned(),
+        sql: sql.to_owned(),
+        created_at: now,
+        updated_at: now,
+    })
+}
+
+pub fn update_saved_query(
+    conn: &Connection,
+    id: i64,
+    name: &str,
+    sql: &str,
+) -> AppResult<SavedQuery> {
+    let trimmed = name.trim();
+    if trimmed.is_empty() {
+        return Err(AppError::InvalidData("snippet name is empty".into()));
+    }
+    let now = Utc::now().to_rfc3339();
+    let affected = conn.execute(
+        "UPDATE saved_queries SET name = ?, sql = ?, updated_at = ? WHERE id = ?",
+        params![trimmed, sql, now, id],
+    )?;
+    if affected == 0 {
+        return Err(AppError::NotFound(format!("snippet {id} not found")));
+    }
+    get_saved_query(conn, id)?
+        .ok_or_else(|| AppError::NotFound(format!("snippet {id} not found after update")))
+}
+
+pub fn get_saved_query(conn: &Connection, id: i64) -> AppResult<Option<SavedQuery>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, connection_id, name, sql, created_at, updated_at
+         FROM saved_queries WHERE id = ?",
+    )?;
+    let mut rows = stmt.query(params![id])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row_to_snippet(row)?))
+    } else {
+        Ok(None)
+    }
+}
+
+pub fn list_saved_queries(
+    conn: &Connection,
+    connection_id: Uuid,
+) -> AppResult<Vec<SavedQuery>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, connection_id, name, sql, created_at, updated_at
+         FROM saved_queries WHERE connection_id = ?
+         ORDER BY updated_at DESC, id DESC",
+    )?;
+    let rows = stmt.query_map(params![connection_id.to_string()], row_to_snippet)?;
+    let mut out = Vec::new();
+    for r in rows {
+        out.push(r?);
+    }
+    Ok(out)
+}
+
+pub fn delete_saved_query(conn: &Connection, id: i64) -> AppResult<bool> {
+    let affected = conn.execute("DELETE FROM saved_queries WHERE id = ?", params![id])?;
+    Ok(affected > 0)
+}
+
+fn row_to_snippet(row: &Row<'_>) -> rusqlite::Result<SavedQuery> {
+    let conn_id_str: String = row.get("connection_id")?;
+    let connection_id = Uuid::parse_str(&conn_id_str).map_err(|e| {
+        rusqlite::Error::FromSqlConversionFailure(0, rusqlite::types::Type::Text, Box::new(e))
+    })?;
+    Ok(SavedQuery {
+        id: row.get("id")?,
+        connection_id,
+        name: row.get("name")?,
+        sql: row.get("sql")?,
+        created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
+        updated_at: parse_ts(&row.get::<_, String>("updated_at")?)?,
+    })
 }
 
 fn row_to_history(row: &Row<'_>) -> rusqlite::Result<QueryHistoryRow> {

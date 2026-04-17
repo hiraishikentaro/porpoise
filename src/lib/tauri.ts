@@ -31,7 +31,10 @@ export type ConnectionConfig = {
   enable_cleartext_plugin: boolean;
 };
 
-export type SaveConnectionInput = ConnectionConfig & { name: string };
+export type SaveConnectionInput = ConnectionConfig & {
+  name: string;
+  history_enabled: boolean;
+};
 
 export type SavedSslConfig = {
   mode: SslMode;
@@ -58,6 +61,7 @@ export type SavedConnection = {
   ssl: SavedSslConfig;
   ssh: SavedSshConfig | null;
   enable_cleartext_plugin: boolean;
+  history_enabled: boolean;
   created_at: string;
   updated_at: string;
 };
@@ -82,6 +86,7 @@ export type UpdateConnectionInput = {
   ssl: SslConfigInput;
   ssh: SshConfigInput | null;
   enable_cleartext_plugin: boolean;
+  history_enabled: boolean;
 };
 
 export function updateConnection(input: UpdateConnectionInput): Promise<SavedConnection> {
@@ -294,4 +299,29 @@ export function listQueryHistory(opts: {
 
 export function clearQueryHistory(connectionId: string | null): Promise<number> {
   return invoke<number>("clear_query_history", { connectionId });
+}
+
+export type SavedQuery = {
+  id: number;
+  connection_id: string;
+  name: string;
+  sql: string;
+  created_at: string;
+  updated_at: string;
+};
+
+export function saveSnippet(connectionId: string, name: string, sql: string): Promise<SavedQuery> {
+  return invoke<SavedQuery>("save_snippet", { connectionId, name, sql });
+}
+
+export function updateSnippet(id: number, name: string, sql: string): Promise<SavedQuery> {
+  return invoke<SavedQuery>("update_snippet", { id, name, sql });
+}
+
+export function listSnippets(connectionId: string): Promise<SavedQuery[]> {
+  return invoke<SavedQuery[]>("list_snippets", { connectionId });
+}
+
+export function deleteSnippet(id: number): Promise<boolean> {
+  return invoke<boolean>("delete_snippet", { id });
 }

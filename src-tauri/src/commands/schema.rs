@@ -376,26 +376,41 @@ pub async fn execute_query(
     let outcome = execute_query_inner(&pool, &sql, database.as_deref(), start).await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
-    // 履歴は成功/失敗の両方で残す。書き込み失敗はログに落として握りつぶす
-    // (履歴保存がアプリの主機能を阻害しないように)
-    let (row_count, error_msg): (Option<i64>, Option<String>) = match &outcome {
-        Ok(QueryResult::Select { returned, .. }) => (Some(*returned as i64), None),
-        Ok(QueryResult::Affected { rows, .. }) => (Some(*rows as i64), None),
-        Err(e) => (None, Some(e.to_string())),
-    };
-    if let Err(e) = record_history(
-        &state,
-        connection_id,
-        database.as_deref(),
-        &sql,
-        elapsed_ms,
-        row_count,
-        error_msg.as_deref(),
-    ) {
-        tracing::warn!(error = %e, "failed to record query history");
+    // プライバシー設定: 接続ごとに history_enabled=false の場合は記録しない
+    if history_enabled(&state, connection_id) {
+        let (row_count, error_msg): (Option<i64>, Option<String>) = match &outcome {
+            Ok(QueryResult::Select { returned, .. }) => (Some(*returned as i64), None),
+            Ok(QueryResult::Affected { rows, .. }) => (Some(*rows as i64), None),
+            Err(e) => (None, Some(e.to_string())),
+        };
+        if let Err(e) = record_history(
+            &state,
+            connection_id,
+            database.as_deref(),
+            &sql,
+            elapsed_ms,
+            row_count,
+            error_msg.as_deref(),
+        ) {
+            tracing::warn!(error = %e, "failed to record query history");
+        }
     }
 
     outcome
+}
+
+fn history_enabled(state: &State<'_, AppState>, id: Uuid) -> bool {
+    use crate::storage::local_db;
+    let db = state.local_db.lock().expect("local_db mutex poisoned");
+    match local_db::get(&db, id) {
+        Ok(Some(saved)) => saved.history_enabled,
+        // 接続メタが見つからない場合は保守的に記録しておく (後で消せる)
+        Ok(None) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "history_enabled lookup failed; recording anyway");
+            true
+        }
+    }
 }
 
 async fn execute_query_inner(

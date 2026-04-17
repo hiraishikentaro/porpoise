@@ -40,6 +40,13 @@ pub struct SaveConnectionInput {
     pub ssh: Option<SshConfigInput>,
     #[serde(default)]
     pub enable_cleartext_plugin: bool,
+    /// クエリ履歴を記録するか (default true)
+    #[serde(default = "default_true")]
+    pub history_enabled: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[tauri::command]
@@ -64,6 +71,7 @@ pub async fn save_connection(
                 ssl: input.ssl.to_saved(),
                 ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
                 enable_cleartext_plugin: input.enable_cleartext_plugin,
+                history_enabled: input.history_enabled,
             },
         )?
     };
@@ -124,6 +132,8 @@ pub struct UpdateConnectionInput {
     pub ssh: Option<SshConfigInput>,
     #[serde(default)]
     pub enable_cleartext_plugin: bool,
+    #[serde(default = "default_true")]
+    pub history_enabled: bool,
 }
 
 #[tauri::command]
@@ -158,6 +168,7 @@ pub async fn update_connection(
                 ssl: input.ssl.to_saved(),
                 ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
                 enable_cleartext_plugin: input.enable_cleartext_plugin,
+                history_enabled: input.history_enabled,
             },
         )?
     };

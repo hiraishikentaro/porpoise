@@ -7,13 +7,18 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 import {
   clearQueryHistory,
+  deleteSnippet,
   executeQuery,
   listDatabases,
   listQueryHistory,
+  listSnippets,
   type QueryHistoryRow,
   type QueryResult,
+  type SavedQuery,
   type SchemaSnapshot,
+  saveSnippet,
   schemaSnapshot,
+  updateSnippet,
 } from "@/lib/tauri";
 
 type Props = {
@@ -346,7 +351,7 @@ export function SqlEditor({
                 ? "border-chart-3/60 bg-chart-3/10 text-chart-3"
                 : "border-border text-muted-foreground hover:border-chart-3/50 hover:text-chart-3"
             }`}
-            title="Toggle query history"
+            title="Toggle history & snippets drawer"
           >
             <HistoryIcon />
             History
@@ -418,9 +423,11 @@ export function SqlEditor({
         </div>
 
         {historyOpen && (
-          <HistoryDrawer
+          <EditorSideDrawer
             connectionId={connectionId}
             runStateKind={runState.kind}
+            getCurrentSql={() => sqlTextRef.current}
+            currentDatabase={database}
             onLoad={(sql) => replaceEditor(sql)}
             onOpenNew={onOpenInNewEditor ? (sql, db) => onOpenInNewEditor(sql, db) : undefined}
             onClose={() => setHistoryOpen(false)}
@@ -431,18 +438,103 @@ export function SqlEditor({
   );
 }
 
-function HistoryDrawer({
+type DrawerMode = "history" | "snippets";
+
+function EditorSideDrawer({
   connectionId,
   runStateKind,
+  getCurrentSql,
+  currentDatabase,
   onLoad,
   onOpenNew,
   onClose,
 }: {
   connectionId: string;
   runStateKind: RunState["kind"];
+  getCurrentSql: () => string;
+  currentDatabase: string | null;
   onLoad: (sql: string) => void;
   onOpenNew?: (sql: string, database: string | null) => void;
   onClose: () => void;
+}) {
+  const [mode, setMode] = useState<DrawerMode>("history");
+
+  return (
+    <aside className="flex h-full w-[340px] shrink-0 flex-col border-l border-border bg-sidebar/30">
+      <header className="flex items-center justify-between gap-2 px-3 pt-2.5 pb-2">
+        <div className="inline-flex overflow-hidden rounded-md border border-border text-[0.65rem]">
+          <ModeTabButton active={mode === "history"} onClick={() => setMode("history")}>
+            History
+          </ModeTabButton>
+          <ModeTabButton active={mode === "snippets"} onClick={() => setMode("snippets")}>
+            Snippets
+          </ModeTabButton>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="rounded-md px-1 text-muted-foreground/70 transition-colors hover:text-foreground"
+          aria-label="Close drawer"
+          title="Close"
+        >
+          ✕
+        </button>
+      </header>
+      <div className="tp-hair" />
+      {mode === "history" ? (
+        <HistoryBody
+          connectionId={connectionId}
+          runStateKind={runStateKind}
+          onLoad={onLoad}
+          onOpenNew={onOpenNew}
+        />
+      ) : (
+        <SnippetsBody
+          connectionId={connectionId}
+          getCurrentSql={getCurrentSql}
+          currentDatabase={currentDatabase}
+          onLoad={onLoad}
+          onOpenNew={onOpenNew}
+        />
+      )}
+    </aside>
+  );
+}
+
+function ModeTabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-2.5 py-1 font-semibold uppercase tracking-wider transition-colors ${
+        active
+          ? "bg-foreground text-background"
+          : "bg-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function HistoryBody({
+  connectionId,
+  runStateKind,
+  onLoad,
+  onOpenNew,
+}: {
+  connectionId: string;
+  runStateKind: RunState["kind"];
+  onLoad: (sql: string) => void;
+  onOpenNew?: (sql: string, database: string | null) => void;
 }) {
   const [items, setItems] = useState<QueryHistoryRow[]>([]);
   const [query, setQuery] = useState("");
@@ -497,60 +589,49 @@ function HistoryDrawer({
   }
 
   return (
-    <aside className="flex h-full w-[340px] shrink-0 flex-col border-l border-border bg-sidebar/30">
-      <header className="flex flex-col gap-2 px-3 pt-2.5 pb-2">
-        <div className="flex items-center justify-between">
-          <span className="tp-section-title">History</span>
-          <div className="flex items-center gap-1">
-            <span className="tp-num text-[0.65rem] text-muted-foreground/60">{items.length}</span>
-            <button
-              type="button"
-              onClick={handleClear}
-              className="rounded-md border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wider text-muted-foreground transition-colors hover:border-destructive/60 hover:text-destructive"
-              title="Clear history"
-            >
-              Clear
-            </button>
-            <button
-              type="button"
-              onClick={onClose}
-              className="rounded-md px-1 text-muted-foreground/70 transition-colors hover:text-foreground"
-              aria-label="Close history"
-              title="Close"
-            >
-              ✕
-            </button>
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-col gap-2 px-3 pt-2 pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-input/40 px-2 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_2px_var(--accent-glow)]">
+            <SearchIcon />
+            <input
+              placeholder="Search SQL"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              className="h-full flex-1 bg-transparent text-[0.75rem] outline-none placeholder:text-muted-foreground/60"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="text-muted-foreground/50 hover:text-foreground"
+                aria-label="Clear search"
+              >
+                ✕
+              </button>
+            )}
           </div>
+          <button
+            type="button"
+            onClick={handleClear}
+            className="rounded-md border border-border px-1.5 py-0.5 text-[0.6rem] uppercase tracking-wider text-muted-foreground transition-colors hover:border-destructive/60 hover:text-destructive"
+            title="Clear history"
+          >
+            Clear
+          </button>
         </div>
-        <div className="flex h-7 items-center gap-2 rounded-md border border-border bg-input/40 px-2 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_2px_var(--accent-glow)]">
-          <SearchIcon />
-          <input
-            placeholder="Search SQL"
-            value={query}
-            onChange={(e) => setQuery(e.currentTarget.value)}
-            className="h-full flex-1 bg-transparent text-[0.75rem] outline-none placeholder:text-muted-foreground/60"
-          />
-          {query && (
-            <button
-              type="button"
-              onClick={() => setQuery("")}
-              className="text-muted-foreground/50 hover:text-foreground"
-              aria-label="Clear search"
-            >
-              ✕
-            </button>
-          )}
+        <div className="flex items-center justify-between">
+          <div className="inline-flex overflow-hidden rounded-md border border-border text-[0.6rem]">
+            <ScopeButton active={scope === "connection"} onClick={() => setScope("connection")}>
+              This conn
+            </ScopeButton>
+            <ScopeButton active={scope === "all"} onClick={() => setScope("all")}>
+              All
+            </ScopeButton>
+          </div>
+          <span className="tp-num text-[0.62rem] text-muted-foreground/60">{items.length}</span>
         </div>
-        <div className="inline-flex w-fit overflow-hidden rounded-md border border-border text-[0.62rem]">
-          <ScopeButton active={scope === "connection"} onClick={() => setScope("connection")}>
-            This conn
-          </ScopeButton>
-          <ScopeButton active={scope === "all"} onClick={() => setScope("all")}>
-            All
-          </ScopeButton>
-        </div>
-      </header>
-      <div className="tp-hair" />
+      </div>
 
       {error && (
         <p className="mx-3 my-2 rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-[0.7rem] text-destructive">
@@ -640,8 +721,302 @@ function HistoryDrawer({
           );
         })}
       </ul>
-    </aside>
+    </div>
   );
+}
+
+function SnippetsBody({
+  connectionId,
+  getCurrentSql,
+  currentDatabase,
+  onLoad,
+  onOpenNew,
+}: {
+  connectionId: string;
+  getCurrentSql: () => string;
+  currentDatabase: string | null;
+  onLoad: (sql: string) => void;
+  onOpenNew?: (sql: string, database: string | null) => void;
+}) {
+  const [items, setItems] = useState<SavedQuery[]>([]);
+  const [query, setQuery] = useState("");
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<number | null>(null);
+  const [editing, setEditing] = useState<{ id: number; name: string; sql: string } | null>(null);
+  const [saving, setSaving] = useState(false);
+
+  const load = useCallback(() => {
+    let cancelled = false;
+    setLoading(true);
+    setError(null);
+    listSnippets(connectionId)
+      .then((list) => {
+        if (!cancelled) setItems(list);
+      })
+      .catch((e) => {
+        if (!cancelled) setError(String(e));
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId]);
+
+  useEffect(() => load(), [load]);
+
+  const filtered = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return items;
+    return items.filter((s) => s.name.toLowerCase().includes(q) || s.sql.toLowerCase().includes(q));
+  }, [items, query]);
+
+  async function handleSaveCurrent() {
+    const sql = getCurrentSql().trim();
+    if (!sql) {
+      setError("Editor is empty.");
+      return;
+    }
+    const name = window.prompt("Snippet name:", defaultSnippetName(sql));
+    if (!name?.trim()) return;
+    setSaving(true);
+    setError(null);
+    try {
+      const saved = await saveSnippet(connectionId, name.trim(), sql);
+      setItems((prev) => [saved, ...prev.filter((s) => s.id !== saved.id)]);
+      setSelectedId(saved.id);
+    } catch (e) {
+      setError(String(e));
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function handleDelete(id: number) {
+    if (!window.confirm("Delete this snippet?")) return;
+    try {
+      await deleteSnippet(id);
+      setItems((prev) => prev.filter((s) => s.id !== id));
+      if (selectedId === id) setSelectedId(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  function startEdit(snippet: SavedQuery) {
+    setEditing({ id: snippet.id, name: snippet.name, sql: snippet.sql });
+  }
+
+  async function commitEdit() {
+    if (!editing) return;
+    const name = editing.name.trim();
+    if (!name) {
+      setError("Name is required.");
+      return;
+    }
+    try {
+      const updated = await updateSnippet(editing.id, name, editing.sql);
+      setItems((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+      setEditing(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  async function handleOverwrite(id: number) {
+    const sql = getCurrentSql();
+    const existing = items.find((s) => s.id === id);
+    if (!existing) return;
+    if (!window.confirm(`Overwrite "${existing.name}" with current editor contents?`)) return;
+    try {
+      const updated = await updateSnippet(id, existing.name, sql);
+      setItems((prev) => prev.map((s) => (s.id === updated.id ? updated : s)));
+    } catch (e) {
+      setError(String(e));
+    }
+  }
+
+  return (
+    <div className="flex min-h-0 flex-1 flex-col">
+      <div className="flex flex-col gap-2 px-3 pt-2 pb-2">
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex h-7 min-w-0 flex-1 items-center gap-2 rounded-md border border-border bg-input/40 px-2 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_2px_var(--accent-glow)]">
+            <SearchIcon />
+            <input
+              placeholder="Search snippets"
+              value={query}
+              onChange={(e) => setQuery(e.currentTarget.value)}
+              className="h-full flex-1 bg-transparent text-[0.75rem] outline-none placeholder:text-muted-foreground/60"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery("")}
+                className="text-muted-foreground/50 hover:text-foreground"
+                aria-label="Clear search"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <button
+            type="button"
+            onClick={handleSaveCurrent}
+            disabled={saving}
+            className="tp-btn tp-btn-primary h-7 px-2 text-[0.65rem] disabled:opacity-50"
+            title="Save current SQL as a named snippet"
+          >
+            {saving ? "…" : "+ Save"}
+          </button>
+        </div>
+        <span className="tp-num self-end text-[0.62rem] text-muted-foreground/60">
+          {filtered.length}
+        </span>
+      </div>
+
+      {error && (
+        <p className="mx-3 my-2 rounded-md border border-destructive/50 bg-destructive/10 px-2 py-1.5 text-[0.7rem] text-destructive">
+          {error}
+        </p>
+      )}
+
+      <ul className="min-h-0 flex-1 overflow-y-auto py-1">
+        {loading && items.length === 0 && (
+          <li className="px-3 py-2 text-[0.72rem] text-muted-foreground">Loading…</li>
+        )}
+        {!loading && items.length === 0 && (
+          <li className="px-3 py-6 text-center text-[0.72rem] text-muted-foreground/70">
+            No snippets yet. Press <span className="tp-kbd">+ Save</span> to store the current
+            query.
+          </li>
+        )}
+        {!loading && items.length > 0 && filtered.length === 0 && (
+          <li className="px-3 py-6 text-center text-[0.72rem] text-muted-foreground/70">
+            No match.
+          </li>
+        )}
+        {filtered.map((it) => {
+          const isSelected = selectedId === it.id;
+          const isEditing = editing?.id === it.id;
+          return (
+            <li key={it.id}>
+              <div
+                className={`group relative flex flex-col gap-1 px-3 py-2 transition-colors ${
+                  isSelected
+                    ? "bg-accent/10 shadow-[inset_2px_0_0_var(--accent)]"
+                    : "hover:bg-sidebar-accent/40"
+                }`}
+              >
+                {isEditing ? (
+                  <div className="flex flex-col gap-1.5">
+                    <input
+                      value={editing.name}
+                      onChange={(e) => setEditing({ ...editing, name: e.currentTarget.value })}
+                      className="h-7 w-full rounded-md border border-border bg-input/40 px-2 text-[0.75rem] outline-none focus:border-accent"
+                      placeholder="Name"
+                    />
+                    <textarea
+                      value={editing.sql}
+                      onChange={(e) => setEditing({ ...editing, sql: e.currentTarget.value })}
+                      rows={4}
+                      className="w-full rounded-md border border-border bg-input/40 px-2 py-1 font-mono text-[0.72rem] outline-none focus:border-accent"
+                    />
+                    <div className="flex items-center gap-1">
+                      <button
+                        type="button"
+                        onClick={commitEdit}
+                        className="tp-btn tp-btn-primary h-6 px-2 text-[0.62rem]"
+                      >
+                        Save
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setEditing(null)}
+                        className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.62rem] text-muted-foreground hover:text-foreground"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      onClick={() => setSelectedId(it.id)}
+                      onDoubleClick={() => onLoad(it.sql)}
+                      className="flex w-full flex-col gap-0.5 text-left"
+                      title="click: select · double-click: load into editor"
+                    >
+                      <div className="flex items-baseline justify-between gap-2">
+                        <span className="truncate text-[0.78rem] font-medium">{it.name}</span>
+                        <span className="shrink-0 font-mono text-[0.6rem] text-muted-foreground/60">
+                          {formatRelative(it.updated_at)}
+                        </span>
+                      </div>
+                      <span className="truncate font-mono text-[0.68rem] text-muted-foreground/80">
+                        {firstLine(it.sql)}
+                      </span>
+                    </button>
+                    {isSelected && (
+                      <div className="mt-1 flex flex-wrap items-center gap-1">
+                        <button
+                          type="button"
+                          onClick={() => onLoad(it.sql)}
+                          className="tp-btn tp-btn-primary h-6 px-2 text-[0.62rem]"
+                          title="Replace current editor contents"
+                        >
+                          Load
+                        </button>
+                        {onOpenNew && (
+                          <button
+                            type="button"
+                            onClick={() => onOpenNew(it.sql, currentDatabase)}
+                            className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.62rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent"
+                            title="Open in a new editor tab"
+                          >
+                            New tab
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => handleOverwrite(it.id)}
+                          className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.62rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent"
+                          title="Overwrite with current editor SQL"
+                        >
+                          Overwrite
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => startEdit(it)}
+                          className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.62rem] text-muted-foreground transition-colors hover:border-accent/60 hover:text-accent"
+                        >
+                          Edit
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleDelete(it.id)}
+                          className="inline-flex h-6 items-center rounded-md border border-border px-2 text-[0.62rem] text-muted-foreground transition-colors hover:border-destructive/60 hover:text-destructive"
+                        >
+                          Delete
+                        </button>
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </li>
+          );
+        })}
+      </ul>
+    </div>
+  );
+}
+
+function defaultSnippetName(sql: string): string {
+  const line = sql.replace(/\s+/g, " ").trim();
+  return line.length > 40 ? line.slice(0, 40) : line;
 }
 
 function ScopeButton({
