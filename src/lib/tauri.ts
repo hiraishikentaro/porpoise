@@ -170,18 +170,38 @@ export type CellChange = {
   value: string | null;
 };
 
-export type RowEdit = {
-  database: string;
-  table: string;
-  changes: CellChange[];
-  pk: CellChange[];
-};
+export type RowChange =
+  | {
+      kind: "update";
+      database: string;
+      table: string;
+      changes: CellChange[];
+      pk: CellChange[];
+    }
+  | {
+      kind: "insert";
+      database: string;
+      table: string;
+      /** 明示的に設定する列。空配列なら全列 DEFAULT */
+      values: CellChange[];
+    }
+  | {
+      kind: "delete";
+      database: string;
+      table: string;
+      pk: CellChange[];
+    };
 
-export type CommitEditsResult = {
-  affected_rows: number;
+export type CommitChangesResult = {
+  updated: number;
+  inserted: number;
+  deleted: number;
   statements: number;
 };
 
-export function commitEdits(connectionId: string, edits: RowEdit[]): Promise<CommitEditsResult> {
-  return invoke<CommitEditsResult>("commit_edits", { connectionId, edits });
+export function commitChanges(
+  connectionId: string,
+  changes: RowChange[],
+): Promise<CommitChangesResult> {
+  return invoke<CommitChangesResult>("commit_changes", { connectionId, changes });
 }

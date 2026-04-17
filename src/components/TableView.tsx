@@ -15,8 +15,8 @@ function isLongEditor(kind: EditorKind): boolean {
 import {
   type CellChange,
   type ColumnInfo,
-  commitEdits,
-  type RowEdit,
+  commitChanges,
+  type RowChange,
   selectTableRows,
   type TablePage,
 } from "@/lib/tauri";
@@ -55,19 +55,62 @@ const initialState: State = {
   error: null,
 };
 
-/** edits のキーは row:col で索引。値は新しいセル値 (null で NULL)。 */
+/** edits のキーは row:col で索引 (既存行のセル編集バッファ)。値は新しいセル値 (null で NULL)。 */
 type EditMap = Record<string, string | null>;
 const editKey = (row: number, col: number) => `${row}:${col}`;
 
-type EditingCell = { row: number; col: number } | null;
+/** 新規行: tempId + 明示的に値が設定された列 (colIdx → string|null)。未設定列は DEFAULT */
+type NewRow = {
+  tempId: string;
+  values: Record<number, string | null>;
+};
+
+/**
+ * 編集中セルの位置。既存行は kind=existing(row は全体 index)、
+ * 新規行は kind=new(tempId を直接保持)。
+ */
+type EditingCell =
+  | { kind: "existing"; row: number; col: number }
+  | { kind: "new"; tempId: string; col: number }
+  | null;
+
+function tempId(): string {
+  return `new-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+}
+
+type ContextTarget = { kind: "existing"; row: number } | { kind: "new"; tempId: string };
+
+type ContextMenu = {
+  x: number;
+  y: number;
+  target: ContextTarget;
+};
 
 export function TableView({ connectionId, database, table, columns }: Props) {
   const [state, setState] = useState<State>(initialState);
   const [edits, setEdits] = useState<EditMap>({});
+  const [newRows, setNewRows] = useState<NewRow[]>([]);
+  const [deletedRows, setDeletedRows] = useState<Set<number>>(new Set());
   const [editing, setEditing] = useState<EditingCell>(null);
   const [showCommit, setShowCommit] = useState(false);
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
+  const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+
+  // Click anywhere / Esc で閉じる
+  useEffect(() => {
+    if (!contextMenu) return;
+    const close = () => setContextMenu(null);
+    const keyClose = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setContextMenu(null);
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", keyClose);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", keyClose);
+    };
+  }, [contextMenu]);
 
   const parentRef = useRef<HTMLDivElement>(null);
   const stateRef = useRef(state);
@@ -84,6 +127,8 @@ export function TableView({ connectionId, database, table, columns }: Props) {
       if (reset) {
         setState({ ...initialState, loading: true });
         setEdits({});
+        setNewRows([]);
+        setDeletedRows(new Set());
         setEditing(null);
       } else {
         const current = stateRef.current;
@@ -120,8 +165,13 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     loadPage(true);
   }, [loadPage]);
 
+  /**
+   * Virtualized rendering は「新規行 + 既存行」のフラットリストで動かす。
+   * virtual index < newRows.length なら新規行、以上なら既存行 (offset を引く)。
+   */
+  const totalVirtualRows = state.rows.length + newRows.length;
   const rowVirtualizer = useVirtualizer({
-    count: state.rows.length,
+    count: totalVirtualRows,
     getScrollElement: () => parentRef.current,
     estimateSize: () => 28,
     overscan: 20,
@@ -132,10 +182,11 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     if (state.reachedEnd || state.loading) return;
     const last = virtualItems[virtualItems.length - 1];
     if (!last) return;
-    if (last.index >= state.rows.length - 50) {
+    // 既存行の末尾 50 行手前に到達したら次ページを呼ぶ
+    if (last.index >= totalVirtualRows - 50) {
       loadPage(false);
     }
-  }, [virtualItems, state.reachedEnd, state.loading, state.rows.length, loadPage]);
+  }, [virtualItems, state.reachedEnd, state.loading, totalVirtualRows, loadPage]);
 
   // 列幅はヘッダ + サンプル行からコンテンツ長を測って決める。
   // canvas.measureText を使い、CJK 含めて実幅で計算する。
@@ -167,24 +218,44 @@ export function TableView({ connectionId, database, table, columns }: Props) {
   }, [state.columnNames, state.rows, measureCtx]);
   const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
-  const editCount = Object.keys(edits).length;
+  /**
+   * 削除予定に含まれる行の UPDATE は無駄なので除外する。
+   * 削除した行を「戻して更新」する UX は後回し。
+   */
+  const effectiveEditCount = useMemo(() => {
+    let n = 0;
+    for (const key of Object.keys(edits)) {
+      const row = Number(key.split(":")[0]);
+      if (!deletedRows.has(row)) n++;
+    }
+    return n;
+  }, [edits, deletedRows]);
 
-  const pendingRowEdits: RowEdit[] = useMemo(() => {
+  const insertCount = newRows.length;
+  const deleteCount = deletedRows.size;
+  const totalChanges = effectiveEditCount + insertCount + deleteCount;
+
+  const pendingChanges: RowChange[] = useMemo(() => {
+    const out: RowChange[] = [];
+
     const pkOf = (row: number): CellChange[] | null => {
       const r = state.rows[row];
       if (!r) return null;
-      const out: CellChange[] = [];
+      const values: CellChange[] = [];
       for (const pk of pkColumns) {
         const idx = state.columnNames.indexOf(pk);
         if (idx < 0) return null;
-        out.push({ column: pk, value: r[idx] });
+        values.push({ column: pk, value: r[idx] });
       }
-      return out;
+      return values;
     };
+
+    // UPDATE: 削除予定に含まれない編集のみ
     const byRow = new Map<number, CellChange[]>();
     for (const [key, value] of Object.entries(edits)) {
       const [rowStr, colStr] = key.split(":");
       const row = Number(rowStr);
+      if (deletedRows.has(row)) continue;
       const col = Number(colStr);
       const column = state.columnNames[col];
       if (column === undefined) continue;
@@ -192,14 +263,33 @@ export function TableView({ connectionId, database, table, columns }: Props) {
       list.push({ column, value });
       byRow.set(row, list);
     }
-    const out: RowEdit[] = [];
     for (const [row, changes] of byRow.entries()) {
       const pk = pkOf(row);
       if (!pk) continue;
-      out.push({ database, table, changes, pk });
+      out.push({ kind: "update", database, table, changes, pk });
     }
+
+    // INSERT: 新規行ごとに explicit に設定した列だけを送る (未設定は MySQL DEFAULT)
+    for (const nr of newRows) {
+      const values: CellChange[] = [];
+      for (const [colIdxStr, v] of Object.entries(nr.values)) {
+        const colIdx = Number(colIdxStr);
+        const column = state.columnNames[colIdx];
+        if (column === undefined) continue;
+        values.push({ column, value: v });
+      }
+      out.push({ kind: "insert", database, table, values });
+    }
+
+    // DELETE
+    for (const row of deletedRows) {
+      const pk = pkOf(row);
+      if (!pk) continue;
+      out.push({ kind: "delete", database, table, pk });
+    }
+
     return out;
-  }, [edits, state.columnNames, state.rows, database, table, pkColumns]);
+  }, [edits, newRows, deletedRows, state.columnNames, state.rows, database, table, pkColumns]);
 
   function setCell(row: number, col: number, newValue: string | null) {
     const key = editKey(row, col);
@@ -217,6 +307,35 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     }
   }
 
+  function setNewRowCell(tempIdValue: string, col: number, value: string | null) {
+    setNewRows((prev) =>
+      prev.map((r) =>
+        r.tempId === tempIdValue ? { ...r, values: { ...r.values, [col]: value } } : r,
+      ),
+    );
+  }
+
+  function addNewRow() {
+    const row = { tempId: tempId(), values: {} as Record<number, string | null> };
+    // 追加は先頭に差し込むのでテーブルの一番上に出る
+    setNewRows((prev) => [row, ...prev]);
+    // 追加直後にスクロール位置を一番上へ戻して見えやすく
+    parentRef.current?.scrollTo({ top: 0 });
+  }
+
+  function removeNewRow(tempIdValue: string) {
+    setNewRows((prev) => prev.filter((r) => r.tempId !== tempIdValue));
+  }
+
+  function toggleDelete(row: number) {
+    setDeletedRows((prev) => {
+      const next = new Set(prev);
+      if (next.has(row)) next.delete(row);
+      else next.add(row);
+      return next;
+    });
+  }
+
   function cellValue(row: number, col: number): string | null {
     const key = editKey(row, col);
     if (key in edits) return edits[key];
@@ -231,7 +350,7 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     return pkColumns.includes(state.columnNames[col] ?? "");
   }
 
-  function canEditCell(col: number): boolean {
+  function canEditExistingCell(col: number): boolean {
     // PK 列は編集禁止 (変わると WHERE が壊れる)
     return editable && !columnIsPk(col);
   }
@@ -240,7 +359,7 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     setCommitting(true);
     setCommitError(null);
     try {
-      await commitEdits(connectionId, pendingRowEdits);
+      await commitChanges(connectionId, pendingChanges);
       setShowCommit(false);
       // 全体再取得で真実を映す
       await loadPage(true);
@@ -253,6 +372,8 @@ export function TableView({ connectionId, database, table, columns }: Props) {
 
   function handleDiscard() {
     setEdits({});
+    setNewRows([]);
+    setDeletedRows(new Set());
     setEditing(null);
     setShowCommit(false);
   }
@@ -269,7 +390,17 @@ export function TableView({ connectionId, database, table, columns }: Props) {
         </span>
         <div className="flex items-center gap-2">
           {state.loading && <span className="text-muted-foreground">Loading…</span>}
-          {editCount > 0 && (
+          {editable && (
+            <button
+              type="button"
+              onClick={addNewRow}
+              className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
+              title="Add a new row"
+            >
+              + Row
+            </button>
+          )}
+          {totalChanges > 0 && (
             <>
               <button
                 type="button"
@@ -283,7 +414,7 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                 onClick={() => setShowCommit(true)}
                 className="rounded-md border border-accent bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground hover:opacity-90"
               >
-                Commit {editCount} change{editCount === 1 ? "" : "s"}
+                Commit {totalChanges} change{totalChanges === 1 ? "" : "s"}
               </button>
             </>
           )}
@@ -327,28 +458,73 @@ export function TableView({ connectionId, database, table, columns }: Props) {
 
           <div style={{ height: rowVirtualizer.getTotalSize(), position: "relative" }}>
             {virtualItems.map((virtualRow) => {
-              const row = state.rows[virtualRow.index];
+              const idx = virtualRow.index;
+              const isNewRow = idx < newRows.length;
+              if (isNewRow) {
+                const nr = newRows[idx];
+                if (!nr) return null;
+                return (
+                  <NewRowView
+                    key={virtualRow.key}
+                    virtualRow={virtualRow}
+                    totalWidth={totalWidth}
+                    columns={columns}
+                    columnNames={state.columnNames}
+                    colWidths={colWidths}
+                    newRow={nr}
+                    editing={editing}
+                    setEditing={setEditing}
+                    onCell={(col, v) => setNewRowCell(nr.tempId, col, v)}
+                    onContextMenu={(e) => {
+                      e.preventDefault();
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        target: { kind: "new", tempId: nr.tempId },
+                      });
+                    }}
+                  />
+                );
+              }
+              const existingRowIdx = idx - newRows.length;
+              const row = state.rows[existingRowIdx];
+              const rowDeleted = deletedRows.has(existingRowIdx);
               return (
+                // biome-ignore lint/a11y/useKeyWithClickEvents: right-click handler is primary; row has focusable cells
+                // biome-ignore lint/a11y/noStaticElementInteractions: virtualised row container
                 <div
                   key={virtualRow.key}
-                  className="absolute top-0 left-0 flex border-b border-border/30 text-sm odd:bg-sidebar-accent/20 hover:bg-sidebar-accent/40"
+                  className={`absolute top-0 left-0 flex border-b border-border/30 text-sm odd:bg-sidebar-accent/20 hover:bg-sidebar-accent/40 ${
+                    rowDeleted ? "bg-destructive/15" : ""
+                  }`}
                   style={{
                     width: totalWidth,
                     height: virtualRow.size,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
+                  onContextMenu={(e) => {
+                    if (!editable) return;
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      target: { kind: "existing", row: existingRowIdx },
+                    });
+                  }}
                 >
                   {row.map((_, ci) => {
-                    const rowIdx = virtualRow.index;
+                    const rowIdx = existingRowIdx;
                     const colIdx = ci;
                     const value = cellValue(rowIdx, colIdx);
                     const dirty = isDirty(rowIdx, colIdx);
-                    const canEdit = canEditCell(colIdx);
+                    const canEdit = canEditExistingCell(colIdx) && !rowDeleted;
                     const col = columns[colIdx] ?? null;
                     const kind: EditorKind = col ? editorFor(col).kind : "text";
                     const longKind = isLongEditor(kind);
-                    const isEditing = editing?.row === rowIdx && editing.col === colIdx;
-                    // 長いテキストは別モーダルで編集するのでインライン描画しない
+                    const isEditing =
+                      editing?.kind === "existing" &&
+                      editing.row === rowIdx &&
+                      editing.col === colIdx;
                     const inlineEditing = isEditing && !longKind;
 
                     return (
@@ -356,18 +532,20 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                       <div
                         key={`${virtualRow.key}:${state.columnNames[colIdx] ?? colIdx}`}
                         style={{ width: colWidths[colIdx] }}
-                        className={`shrink-0 border-r border-border/20 px-3 py-1.5 ${
-                          dirty ? "bg-accent/20 text-foreground" : ""
-                        } ${canEdit ? "cursor-text" : "cursor-default"}`}
+                        className={`relative shrink-0 border-r border-border/20 px-3 py-1.5 ${
+                          dirty && !rowDeleted ? "bg-accent/20 text-foreground" : ""
+                        } ${canEdit ? "cursor-text" : "cursor-default"} ${
+                          rowDeleted ? "text-destructive line-through opacity-70" : ""
+                        }`}
                         role="gridcell"
                         tabIndex={canEdit ? 0 : -1}
                         onDoubleClick={() => {
-                          if (canEdit) setEditing({ row: rowIdx, col: colIdx });
+                          if (canEdit) setEditing({ kind: "existing", row: rowIdx, col: colIdx });
                         }}
                         onKeyDown={(e) => {
                           if (canEdit && (e.key === "Enter" || e.key === "F2")) {
                             e.preventDefault();
-                            setEditing({ row: rowIdx, col: colIdx });
+                            setEditing({ kind: "existing", row: rowIdx, col: colIdx });
                           }
                         }}
                         title={canEdit ? "double-click or Enter to edit" : undefined}
@@ -393,27 +571,55 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                       </div>
                     );
                   })}
+                  {rowDeleted && (
+                    <span
+                      className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 rounded-sm bg-destructive px-1.5 text-[0.6rem] font-semibold uppercase tracking-wide text-background"
+                      aria-hidden
+                    >
+                      deleted
+                    </span>
+                  )}
                 </div>
               );
             })}
           </div>
         </div>
 
-        {!state.loading && state.rows.length === 0 && (
+        {!state.loading && state.rows.length === 0 && newRows.length === 0 && (
           <p className="px-4 py-3 text-xs text-muted-foreground">No rows.</p>
         )}
       </div>
 
       {showCommit && (
         <CommitModal
-          edits={pendingRowEdits}
+          changes={pendingChanges}
           columnNames={state.columnNames}
           rows={state.rows}
           editsMap={edits}
+          deletedRows={deletedRows}
+          newRows={newRows}
           onCancel={() => setShowCommit(false)}
           onConfirm={handleCommit}
           committing={committing}
           error={commitError}
+        />
+      )}
+
+      {contextMenu && (
+        <RowContextMenu
+          x={contextMenu.x}
+          y={contextMenu.y}
+          target={contextMenu.target}
+          deletedRows={deletedRows}
+          onDelete={(row) => {
+            toggleDelete(row);
+            setContextMenu(null);
+          }}
+          onDiscardNew={(tempId) => {
+            removeNewRow(tempId);
+            setContextMenu(null);
+          }}
+          onClose={() => setContextMenu(null)}
         />
       )}
 
@@ -423,7 +629,14 @@ export function TableView({ connectionId, database, table, columns }: Props) {
         if (!col) return null;
         const spec = editorFor(col);
         if (!isLongEditor(spec.kind)) return null;
-        const currentValue = cellValue(editing.row, editing.col);
+
+        let currentValue: string | null;
+        if (editing.kind === "existing") {
+          currentValue = cellValue(editing.row, editing.col);
+        } else {
+          const nr = newRows.find((r) => r.tempId === editing.tempId);
+          currentValue = nr ? (nr.values[editing.col] ?? null) : null;
+        }
         return (
           <LongFieldEditorModal
             column={col}
@@ -431,15 +644,176 @@ export function TableView({ connectionId, database, table, columns }: Props) {
             initial={currentValue}
             kind={spec.kind}
             onCommit={(v) => {
-              if (editing) {
+              if (!editing) return;
+              if (editing.kind === "existing") {
                 setCell(editing.row, editing.col, v);
-                setEditing(null);
+              } else {
+                setNewRowCell(editing.tempId, editing.col, v);
               }
+              setEditing(null);
             }}
             onCancel={() => setEditing(null)}
           />
         );
       })()}
+    </div>
+  );
+}
+
+function RowContextMenu({
+  x,
+  y,
+  target,
+  deletedRows,
+  onDelete,
+  onDiscardNew,
+}: {
+  x: number;
+  y: number;
+  target: ContextTarget;
+  deletedRows: Set<number>;
+  onDelete: (row: number) => void;
+  onDiscardNew: (tempId: string) => void;
+  onClose: () => void;
+}) {
+  // 画面端でクリップされないよう位置をオフセット
+  const style: React.CSSProperties = {
+    position: "fixed",
+    top: y,
+    left: x,
+    minWidth: 180,
+  };
+
+  return (
+    <div
+      role="menu"
+      onClick={(e) => e.stopPropagation()}
+      onKeyDown={(e) => e.stopPropagation()}
+      style={style}
+      className="z-40 rounded-md border border-border bg-popover p-1 text-sm shadow-xl"
+    >
+      {target.kind === "existing" ? (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => onDelete(target.row)}
+          className={`flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left ${
+            deletedRows.has(target.row)
+              ? "text-muted-foreground hover:bg-muted"
+              : "text-destructive hover:bg-destructive/15"
+          }`}
+        >
+          <span className="font-medium">
+            {deletedRows.has(target.row) ? "Undo delete" : "Delete row"}
+          </span>
+          <span className="ml-auto text-xs text-muted-foreground">row #{target.row}</span>
+        </button>
+      ) : (
+        <button
+          type="button"
+          role="menuitem"
+          onClick={() => onDiscardNew(target.tempId)}
+          className="flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left text-destructive hover:bg-destructive/15"
+        >
+          <span className="font-medium">Discard new row</span>
+        </button>
+      )}
+    </div>
+  );
+}
+
+function NewRowView({
+  virtualRow,
+  totalWidth,
+  columns,
+  columnNames,
+  colWidths,
+  newRow,
+  editing,
+  setEditing,
+  onCell,
+  onContextMenu,
+}: {
+  virtualRow: { key: React.Key; size: number; start: number };
+  totalWidth: number;
+  columns: ColumnInfo[];
+  columnNames: string[];
+  colWidths: number[];
+  newRow: NewRow;
+  editing: EditingCell;
+  setEditing: (c: EditingCell) => void;
+  onCell: (col: number, v: string | null) => void;
+  onContextMenu: (e: React.MouseEvent<HTMLDivElement>) => void;
+}) {
+  const keyPrefix = String(virtualRow.key);
+  return (
+    // biome-ignore lint/a11y/useKeyWithClickEvents: right-click handler
+    // biome-ignore lint/a11y/noStaticElementInteractions: virtualised row container
+    <div
+      className="absolute top-0 left-0 flex border-b border-accent/40 bg-accent/10 text-sm hover:bg-accent/15"
+      style={{
+        width: totalWidth,
+        height: virtualRow.size,
+        transform: `translateY(${virtualRow.start}px)`,
+      }}
+      onContextMenu={onContextMenu}
+    >
+      {columnNames.map((name, colIdx) => {
+        const col = columns[colIdx] ?? null;
+        const kind: EditorKind = col ? editorFor(col).kind : "text";
+        const longKind = isLongEditor(kind);
+        const set = colIdx in newRow.values;
+        const value = set ? newRow.values[colIdx] : null;
+        const isEditing =
+          editing?.kind === "new" && editing.tempId === newRow.tempId && editing.col === colIdx;
+        const inlineEditing = isEditing && !longKind;
+
+        return (
+          // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
+          <div
+            key={`${keyPrefix}:${name ?? colIdx}`}
+            style={{ width: colWidths[colIdx] }}
+            className="relative shrink-0 cursor-text border-r border-border/20 px-3 py-1.5"
+            role="gridcell"
+            tabIndex={0}
+            onDoubleClick={() => setEditing({ kind: "new", tempId: newRow.tempId, col: colIdx })}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" || e.key === "F2") {
+                e.preventDefault();
+                setEditing({ kind: "new", tempId: newRow.tempId, col: colIdx });
+              }
+            }}
+            title="double-click or Enter to edit · leave blank for DEFAULT"
+          >
+            {inlineEditing ? (
+              <TypedEditor
+                column={col}
+                columnName={name ?? ""}
+                initial={value ?? null}
+                onCommit={(v) => {
+                  onCell(colIdx, v);
+                  setEditing(null);
+                }}
+                onCancel={() => setEditing(null)}
+              />
+            ) : !set ? (
+              <span className="text-muted-foreground/50 italic">DEFAULT</span>
+            ) : value === null ? (
+              <span className="text-muted-foreground/60 italic">NULL</span>
+            ) : (
+              <span className="block truncate" title={value}>
+                {value}
+              </span>
+            )}
+          </div>
+        );
+      })}
+      <span
+        className="pointer-events-none absolute top-1/2 right-2 -translate-y-1/2 rounded-sm bg-accent/30 px-1.5 text-[0.6rem] font-semibold uppercase tracking-wide text-accent"
+        aria-hidden
+      >
+        new
+      </span>
     </div>
   );
 }
@@ -776,8 +1150,8 @@ function LongFieldEditorModal({
   const ref = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
-    if (!isNull) ref.current?.focus();
-  }, [isNull]);
+    ref.current?.focus();
+  }, []);
 
   function save() {
     if (isNull) {
@@ -829,7 +1203,9 @@ function LongFieldEditorModal({
                   type="checkbox"
                   checked={isNull}
                   onChange={(e) => {
-                    setIsNull(e.currentTarget.checked);
+                    const next = e.currentTarget.checked;
+                    setIsNull(next);
+                    if (next) setValue("");
                     setError(null);
                   }}
                   className="h-3.5 w-3.5 accent-accent"
@@ -852,10 +1228,11 @@ function LongFieldEditorModal({
         <div className="flex min-h-0 flex-1 flex-col">
           <textarea
             ref={ref}
-            value={isNull ? "" : value}
-            disabled={isNull}
+            value={value}
             onChange={(e) => {
               setValue(e.currentTarget.value);
+              // タイプし始めたら NULL モードは自動解除
+              if (isNull) setIsNull(false);
               setError(null);
             }}
             onKeyDown={(e) => {
@@ -868,7 +1245,10 @@ function LongFieldEditorModal({
               }
             }}
             spellCheck={false}
-            className="flex-1 resize-none bg-background p-4 font-mono text-sm text-foreground outline-none disabled:bg-muted/20 disabled:text-muted-foreground"
+            placeholder={isNull ? "(currently NULL — type to overwrite)" : ""}
+            className={`flex-1 resize-none bg-background p-4 font-mono text-sm text-foreground outline-none ${
+              isNull ? "text-muted-foreground italic" : ""
+            }`}
           />
         </div>
         {error && (
@@ -903,26 +1283,30 @@ function LongFieldEditorModal({
 }
 
 function CommitModal({
-  edits,
+  changes,
   columnNames,
   rows,
   editsMap,
+  deletedRows,
+  newRows,
   onCancel,
   onConfirm,
   committing,
   error,
 }: {
-  edits: RowEdit[];
+  changes: RowChange[];
   columnNames: string[];
   rows: (string | null)[][];
   editsMap: EditMap;
+  deletedRows: Set<number>;
+  newRows: NewRow[];
   onCancel: () => void;
   onConfirm: () => void;
   committing: boolean;
   error: string | null;
 }) {
-  // row-ordered の diff 表示用に、元データとの差分をキーから再計算する
-  const diffs = useMemo(() => {
+  // 更新差分: 削除予定行はスキップ
+  const updateDiffs = useMemo(() => {
     const list: {
       row: number;
       column: string;
@@ -932,6 +1316,7 @@ function CommitModal({
     for (const [key, after] of Object.entries(editsMap)) {
       const [rowStr, colStr] = key.split(":");
       const row = Number(rowStr);
+      if (deletedRows.has(row)) continue;
       const col = Number(colStr);
       const column = columnNames[col];
       if (column === undefined) continue;
@@ -940,7 +1325,11 @@ function CommitModal({
     }
     list.sort((a, b) => a.row - b.row || a.column.localeCompare(b.column));
     return list;
-  }, [editsMap, columnNames, rows]);
+  }, [editsMap, columnNames, rows, deletedRows]);
+
+  const updateCount = changes.filter((c) => c.kind === "update").length;
+  const insertCount = changes.filter((c) => c.kind === "insert").length;
+  const deleteCount = changes.filter((c) => c.kind === "delete").length;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
@@ -948,8 +1337,8 @@ function CommitModal({
         <header className="flex items-baseline justify-between border-b border-border px-5 py-3">
           <h2 className="text-base font-semibold">Review changes</h2>
           <span className="text-xs text-muted-foreground">
-            {edits.length} row{edits.length === 1 ? "" : "s"} · {diffs.length} cell
-            {diffs.length === 1 ? "" : "s"}
+            {updateCount} update{updateCount === 1 ? "" : "s"} · {insertCount} insert
+            {insertCount === 1 ? "" : "s"} · {deleteCount} delete{deleteCount === 1 ? "" : "s"}
           </span>
         </header>
         <div className="flex-1 overflow-auto px-5 py-3">
@@ -957,26 +1346,104 @@ function CommitModal({
             変更は 1 つのトランザクションでコミットされます。影響行が想定より多い場合は
             自動ロールバックします。
           </p>
-          <ul className="flex flex-col divide-y divide-border/60">
-            {diffs.map((d) => (
-              <li
-                key={`${d.row}:${d.column}`}
-                className="grid grid-cols-[80px_120px_1fr] items-baseline gap-3 py-2 text-sm"
-              >
-                <span className="text-xs text-muted-foreground">row #{d.row}</span>
-                <span className="font-medium">{d.column}</span>
-                <span className="flex items-center gap-2 font-mono text-xs">
-                  <span className="max-w-[40%] truncate text-muted-foreground line-through">
-                    {d.before === null ? "NULL" : d.before}
-                  </span>
-                  <span className="text-muted-foreground/60">→</span>
-                  <span className="max-w-[40%] truncate text-foreground">
-                    {d.after === null ? <span className="italic text-accent">NULL</span> : d.after}
-                  </span>
-                </span>
-              </li>
-            ))}
-          </ul>
+
+          {updateDiffs.length > 0 && (
+            <section className="mb-4">
+              <h3 className="mb-1 text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                Updates
+              </h3>
+              <ul className="flex flex-col divide-y divide-border/60">
+                {updateDiffs.map((d) => (
+                  <li
+                    key={`${d.row}:${d.column}`}
+                    className="grid grid-cols-[80px_120px_1fr] items-baseline gap-3 py-2 text-sm"
+                  >
+                    <span className="text-xs text-muted-foreground">row #{d.row}</span>
+                    <span className="font-medium">{d.column}</span>
+                    <span className="flex items-center gap-2 font-mono text-xs">
+                      <span className="max-w-[40%] truncate text-muted-foreground line-through">
+                        {d.before === null ? "NULL" : d.before}
+                      </span>
+                      <span className="text-muted-foreground/60">→</span>
+                      <span className="max-w-[40%] truncate text-foreground">
+                        {d.after === null ? (
+                          <span className="italic text-accent">NULL</span>
+                        ) : (
+                          d.after
+                        )}
+                      </span>
+                    </span>
+                  </li>
+                ))}
+              </ul>
+            </section>
+          )}
+
+          {newRows.length > 0 && (
+            <section className="mb-4">
+              <h3 className="mb-1 text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                Inserts
+              </h3>
+              <ul className="flex flex-col gap-2">
+                {newRows.map((nr, i) => {
+                  const setCols = Object.entries(nr.values).map(([colIdx, v]) => ({
+                    column: columnNames[Number(colIdx)] ?? `#${colIdx}`,
+                    value: v,
+                  }));
+                  return (
+                    <li
+                      key={nr.tempId}
+                      className="rounded-md border border-accent/30 bg-accent/5 px-3 py-2 text-sm"
+                    >
+                      <span className="mb-1 block text-xs text-muted-foreground">
+                        new row #{i + 1}
+                      </span>
+                      {setCols.length === 0 ? (
+                        <span className="text-xs italic text-muted-foreground">
+                          All columns DEFAULT
+                        </span>
+                      ) : (
+                        <ul className="flex flex-col gap-0.5">
+                          {setCols.map((c) => (
+                            <li
+                              key={c.column}
+                              className="grid grid-cols-[120px_1fr] gap-3 font-mono text-xs"
+                            >
+                              <span className="font-medium text-foreground">{c.column}</span>
+                              <span className="truncate">
+                                {c.value === null ? (
+                                  <span className="italic text-accent">NULL</span>
+                                ) : (
+                                  c.value
+                                )}
+                              </span>
+                            </li>
+                          ))}
+                        </ul>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            </section>
+          )}
+
+          {deletedRows.size > 0 && (
+            <section className="mb-2">
+              <h3 className="mb-1 text-[0.7rem] font-semibold uppercase tracking-wide text-muted-foreground">
+                Deletes
+              </h3>
+              <ul className="flex flex-col divide-y divide-border/60">
+                {Array.from(deletedRows)
+                  .sort((a, b) => a - b)
+                  .map((row) => (
+                    <li key={row} className="py-1.5 text-sm text-destructive">
+                      row #{row}
+                    </li>
+                  ))}
+              </ul>
+            </section>
+          )}
         </div>
         {error && (
           <p className="mx-5 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">

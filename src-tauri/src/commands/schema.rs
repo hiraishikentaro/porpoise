@@ -259,98 +259,186 @@ pub struct CellChange {
 }
 
 #[derive(Debug, serde::Deserialize)]
-pub struct RowEdit {
-    pub database: String,
-    pub table: String,
-    pub changes: Vec<CellChange>,
-    /// 行を特定するための WHERE 句に使う列 (PK / unique)
-    pub pk: Vec<CellChange>,
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RowChange {
+    Update {
+        database: String,
+        table: String,
+        changes: Vec<CellChange>,
+        /// WHERE 句に使う PK 列の現在値
+        pk: Vec<CellChange>,
+    },
+    Insert {
+        database: String,
+        table: String,
+        /// 明示的に設定する列。指定されなかった列は MySQL の DEFAULT に任せる
+        values: Vec<CellChange>,
+    },
+    Delete {
+        database: String,
+        table: String,
+        pk: Vec<CellChange>,
+    },
 }
 
-#[derive(Debug, serde::Serialize)]
-pub struct CommitEditsResult {
-    pub affected_rows: u64,
+#[derive(Debug, serde::Serialize, Default)]
+pub struct CommitChangesResult {
+    pub updated: u64,
+    pub inserted: u64,
+    pub deleted: u64,
     pub statements: u64,
 }
 
 #[tauri::command]
-pub async fn commit_edits(
+pub async fn commit_changes(
     state: State<'_, AppState>,
     connection_id: Uuid,
-    edits: Vec<RowEdit>,
-) -> AppResult<CommitEditsResult> {
+    changes: Vec<RowChange>,
+) -> AppResult<CommitChangesResult> {
     let pool = pool_of(&state, connection_id)?;
     let mut conn = pool.get_conn().await?;
 
     use mysql_async::TxOpts;
     let mut tx = conn.start_transaction(TxOpts::default()).await?;
 
-    let mut affected_total: u64 = 0;
-    let mut statements: u64 = 0;
+    let mut result = CommitChangesResult::default();
 
-    for edit in &edits {
-        if edit.changes.is_empty() {
-            continue;
+    for change in &changes {
+        match change {
+            RowChange::Update {
+                database,
+                table,
+                changes: cells,
+                pk,
+            } => {
+                if cells.is_empty() {
+                    continue;
+                }
+                if pk.is_empty() {
+                    tx.rollback().await?;
+                    return Err(AppError::InvalidData(
+                        "row update without primary key is not allowed".into(),
+                    ));
+                }
+                let set_clause = cells
+                    .iter()
+                    .map(|c| format!("{} = ?", quote_ident(&c.column)))
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                let where_clause = pk
+                    .iter()
+                    .map(|c| format!("{} <=> ?", quote_ident(&c.column)))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                let sql = format!(
+                    "UPDATE {}.{} SET {} WHERE {}",
+                    quote_ident(database),
+                    quote_ident(table),
+                    set_clause,
+                    where_clause,
+                );
+                let mut params: Vec<mysql_async::Value> = Vec::new();
+                for c in cells {
+                    params.push(value_of(c.value.as_deref()));
+                }
+                for c in pk {
+                    params.push(value_of(c.value.as_deref()));
+                }
+                tx.exec_drop(sql, params).await?;
+                let affected = tx.affected_rows();
+                if affected > 1 {
+                    tx.rollback().await?;
+                    return Err(AppError::InvalidData(format!(
+                        "update affected {affected} rows (expected <= 1) — PK not unique?"
+                    )));
+                }
+                result.updated += affected;
+                result.statements += 1;
+            }
+            RowChange::Insert {
+                database,
+                table,
+                values,
+            } => {
+                if values.is_empty() {
+                    // 全列 DEFAULT で INSERT
+                    let sql = format!(
+                        "INSERT INTO {}.{} () VALUES ()",
+                        quote_ident(database),
+                        quote_ident(table),
+                    );
+                    tx.exec_drop(sql, ()).await?;
+                } else {
+                    let cols = values
+                        .iter()
+                        .map(|c| quote_ident(&c.column))
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    let placeholders = values.iter().map(|_| "?").collect::<Vec<_>>().join(", ");
+                    let sql = format!(
+                        "INSERT INTO {}.{} ({}) VALUES ({})",
+                        quote_ident(database),
+                        quote_ident(table),
+                        cols,
+                        placeholders,
+                    );
+                    let params: Vec<mysql_async::Value> = values
+                        .iter()
+                        .map(|c| value_of(c.value.as_deref()))
+                        .collect();
+                    tx.exec_drop(sql, params).await?;
+                }
+                result.inserted += tx.affected_rows();
+                result.statements += 1;
+            }
+            RowChange::Delete {
+                database,
+                table,
+                pk,
+            } => {
+                if pk.is_empty() {
+                    tx.rollback().await?;
+                    return Err(AppError::InvalidData(
+                        "row delete without primary key is not allowed".into(),
+                    ));
+                }
+                let where_clause = pk
+                    .iter()
+                    .map(|c| format!("{} <=> ?", quote_ident(&c.column)))
+                    .collect::<Vec<_>>()
+                    .join(" AND ");
+                let sql = format!(
+                    "DELETE FROM {}.{} WHERE {} LIMIT 2",
+                    quote_ident(database),
+                    quote_ident(table),
+                    where_clause,
+                );
+                let params: Vec<mysql_async::Value> =
+                    pk.iter().map(|c| value_of(c.value.as_deref())).collect();
+                tx.exec_drop(sql, params).await?;
+                let affected = tx.affected_rows();
+                if affected > 1 {
+                    tx.rollback().await?;
+                    return Err(AppError::InvalidData(format!(
+                        "delete affected {affected} rows (expected <= 1) — PK not unique?"
+                    )));
+                }
+                result.deleted += affected;
+                result.statements += 1;
+            }
         }
-        if edit.pk.is_empty() {
-            tx.rollback().await?;
-            return Err(AppError::InvalidData(
-                "row edit without primary key is not allowed".into(),
-            ));
-        }
-
-        let set_clause = edit
-            .changes
-            .iter()
-            .map(|c| format!("{} = ?", quote_ident(&c.column)))
-            .collect::<Vec<_>>()
-            .join(", ");
-        let where_clause = edit
-            .pk
-            .iter()
-            .map(|c| format!("{} <=> ?", quote_ident(&c.column)))
-            .collect::<Vec<_>>()
-            .join(" AND ");
-        let sql = format!(
-            "UPDATE {}.{} SET {} WHERE {}",
-            quote_ident(&edit.database),
-            quote_ident(&edit.table),
-            set_clause,
-            where_clause,
-        );
-
-        let mut params: Vec<mysql_async::Value> = Vec::new();
-        for c in &edit.changes {
-            params.push(value_of(c.value.as_deref()));
-        }
-        for c in &edit.pk {
-            params.push(value_of(c.value.as_deref()));
-        }
-
-        tx.exec_drop(sql.clone(), params).await?;
-        let affected = tx.affected_rows();
-        if affected > 1 {
-            tx.rollback().await?;
-            return Err(AppError::InvalidData(format!(
-                "update affected {} rows (expected <= 1) — PK not unique?",
-                affected
-            )));
-        }
-        affected_total += affected;
-        statements += 1;
     }
 
     tx.commit().await?;
     tracing::info!(
         %connection_id,
-        statements,
-        affected_total,
-        "commit_edits ok"
+        updated = result.updated,
+        inserted = result.inserted,
+        deleted = result.deleted,
+        statements = result.statements,
+        "commit_changes ok"
     );
-    Ok(CommitEditsResult {
-        affected_rows: affected_total,
-        statements,
-    })
+    Ok(result)
 }
 
 fn value_of(s: Option<&str>) -> mysql_async::Value {
