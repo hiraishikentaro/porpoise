@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { SavedConnections } from "@/components/SavedConnections";
@@ -320,6 +320,29 @@ function App() {
       removeTab(id);
     }
   }
+
+  // Cmd+W (macOS) / Ctrl+W で、デフォルトのウィンドウ閉じる動作を止めて
+  // アクティブタブだけを閉じる。タブが無い時はデフォルト挙動のまま (window 終了)。
+  const closeTabRef = useRef<(id: string) => void>(() => {});
+  closeTabRef.current = handleCloseTab;
+  const activeTabIdRef = useRef<string | null>(activeTabId);
+  activeTabIdRef.current = activeTabId;
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key !== "w" && e.key !== "W") return;
+      if (!(e.metaKey || e.ctrlKey)) return;
+      if (e.shiftKey || e.altKey) return;
+      const id = activeTabIdRef.current;
+      if (!id) return;
+      e.preventDefault();
+      e.stopPropagation();
+      closeTabRef.current(id);
+    }
+    // capture phase で拾ってデフォルトのメニュー accelerator (Cmd+W) より先に preventDefault
+    window.addEventListener("keydown", onKey, { capture: true });
+    return () => window.removeEventListener("keydown", onKey, { capture: true });
+  }, []);
 
   function handleSelectTab(id: string) {
     setActiveTabId(id);
