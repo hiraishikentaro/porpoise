@@ -1,6 +1,7 @@
 import { autocompletion } from "@codemirror/autocomplete";
 import { MySQL, sql as sqlLang } from "@codemirror/lang-sql";
-import { EditorView, keymap } from "@codemirror/view";
+import { StateEffect, StateField } from "@codemirror/state";
+import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
@@ -27,16 +28,15 @@ type RunState =
   | { kind: "done"; result: QueryResult };
 
 /**
- * カーソル位置のステートメントを切り出す。
- * SQL は文字列/識別子/コメント内の `;` を無視したいが、今は簡易実装:
- *   - 最初に見つかった最後の `;` の前まで / 次の `;` までを返す
- *   - 選択範囲があればそれを優先
+ * カーソル位置のステートメントを切り出し、エディタ内の開始行も返す。
+ * エラー行ハイライトでは relative line を絶対行に変換するのに使う。
  */
-function statementAtCursor(view: EditorView): string {
+function statementAtCursor(view: EditorView): { text: string; startLine: number } {
   const state = view.state;
   const sel = state.selection.main;
   if (!sel.empty) {
-    return state.doc.sliceString(sel.from, sel.to).trim();
+    const text = state.doc.sliceString(sel.from, sel.to).trim();
+    return { text, startLine: state.doc.lineAt(sel.from).number };
   }
   const doc = state.doc.toString();
   const pos = sel.head;
@@ -53,8 +53,63 @@ function statementAtCursor(view: EditorView): string {
       break;
     }
   }
-  return doc.slice(start, end).trim();
+  // 先頭の空白を除いた位置で行番号を取る
+  let firstNonWs = start;
+  while (firstNonWs < end && /\s/.test(doc[firstNonWs])) firstNonWs++;
+  return {
+    text: doc.slice(start, end).trim(),
+    startLine: state.doc.lineAt(firstNonWs).number,
+  };
 }
+
+/**
+ * MySQL エラーメッセージから "at line N" を拾う。N はサーバに送った
+ * SQL 内でのインデックス (1-origin) なので、統合するときは
+ * statement の startLine を足す。
+ */
+function extractErrorLine(message: string): number | null {
+  const m = /at line (\d+)/i.exec(message);
+  if (!m) return null;
+  const n = Number(m[1]);
+  return Number.isFinite(n) ? n : null;
+}
+
+/** エディタのエラー行ハイライト用 State Effect + Field */
+const setErrorLineEffect = StateEffect.define<number | null>();
+const errorLineField = StateField.define<DecorationSet>({
+  create() {
+    return Decoration.none;
+  },
+  update(deco, tr) {
+    let updated = deco.map(tr.changes);
+    for (const e of tr.effects) {
+      if (e.is(setErrorLineEffect)) {
+        if (e.value === null || e.value < 1 || e.value > tr.state.doc.lines) {
+          updated = Decoration.none;
+        } else {
+          const line = tr.state.doc.line(e.value);
+          updated = Decoration.set([
+            Decoration.line({ class: "cm-porpoise-error-line" }).range(line.from),
+          ]);
+        }
+      }
+    }
+    // ユーザーが編集を始めたら自動的にクリア
+    if (tr.docChanged && tr.effects.every((e) => !e.is(setErrorLineEffect))) {
+      updated = Decoration.none;
+    }
+    return updated;
+  },
+  provide: (f) => EditorView.decorations.from(f),
+});
+
+const errorLineTheme = EditorView.baseTheme({
+  ".cm-porpoise-error-line": {
+    backgroundColor: "rgba(220, 38, 38, 0.18)",
+    textDecoration: "underline wavy rgba(220, 38, 38, 0.8)",
+    textUnderlineOffset: "4px",
+  },
+});
 
 export function SqlEditor({
   connectionId,
@@ -110,18 +165,26 @@ export function SqlEditor({
   }, [connectionId, database]);
 
   const run = useCallback(
-    async (sql: string) => {
+    async (sql: string, stmtStartLine: number) => {
       const trimmed = sql.trim().replace(/;+\s*$/, "");
       if (!trimmed) {
         setRunState({ kind: "error", message: "Empty statement." });
         return;
       }
+      // 実行開始時にエラーハイライトをクリア
+      viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
       setRunState({ kind: "running" });
       try {
         const result = await executeQuery(connectionId, trimmed, databaseRef.current);
         setRunState({ kind: "done", result });
       } catch (e) {
-        setRunState({ kind: "error", message: String(e) });
+        const message = String(e);
+        setRunState({ kind: "error", message });
+        const relLine = extractErrorLine(message);
+        if (relLine !== null && viewRef.current) {
+          const abs = stmtStartLine + relLine - 1;
+          viewRef.current.dispatch({ effects: setErrorLineEffect.of(abs) });
+        }
       }
     },
     [connectionId],
@@ -129,11 +192,22 @@ export function SqlEditor({
 
   const runAt = useCallback(() => {
     if (!viewRef.current) return;
-    run(statementAtCursor(viewRef.current));
+    const { text, startLine } = statementAtCursor(viewRef.current);
+    run(text, startLine);
   }, [run]);
 
   const runAll = useCallback(() => {
-    run(sqlTextRef.current);
+    run(sqlTextRef.current, 1);
+  }, [run]);
+
+  const explainAt = useCallback(() => {
+    if (!viewRef.current) return;
+    const { text, startLine } = statementAtCursor(viewRef.current);
+    if (!text) return;
+    // 先頭が EXPLAIN なら重ねない
+    const already = /^\s*explain\b/i.test(text);
+    const wrapped = already ? text : `EXPLAIN ${text}`;
+    run(wrapped, startLine);
   }, [run]);
 
   const formatDocument = useCallback(() => {
@@ -171,6 +245,8 @@ export function SqlEditor({
       sqlLang({ dialect: MySQL, schema: schemaConfig, upperCaseKeywords: true }),
       autocompletion(),
       EditorView.lineWrapping,
+      errorLineField,
+      errorLineTheme,
       keymap.of([
         {
           key: "Mod-Enter",
@@ -187,6 +263,13 @@ export function SqlEditor({
           },
         },
         {
+          key: "Alt-Enter",
+          run: () => {
+            explainAt();
+            return true;
+          },
+        },
+        {
           key: "Shift-Mod-f",
           run: () => {
             formatDocument();
@@ -195,7 +278,7 @@ export function SqlEditor({
         },
       ]),
     ];
-  }, [runAt, runAll, schema, formatDocument]);
+  }, [runAt, runAll, explainAt, schema, formatDocument]);
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
@@ -227,6 +310,7 @@ export function SqlEditor({
           <span className="text-muted-foreground">
             <kbd className="rounded-sm border border-border px-1">⌘↵</kbd> run ·{" "}
             <kbd className="rounded-sm border border-border px-1">⇧⌘↵</kbd> run all ·{" "}
+            <kbd className="rounded-sm border border-border px-1">⌥↵</kbd> explain ·{" "}
             <kbd className="rounded-sm border border-border px-1">⇧⌘F</kbd> format
           </span>
         </div>
@@ -238,6 +322,15 @@ export function SqlEditor({
             title="Format SQL (⇧⌘F)"
           >
             Format
+          </button>
+          <button
+            type="button"
+            onClick={explainAt}
+            disabled={runState.kind === "running"}
+            className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+            title="EXPLAIN this statement (⌥↵)"
+          >
+            Explain
           </button>
           <button
             type="button"
