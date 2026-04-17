@@ -1,6 +1,18 @@
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
+  type EditorKind,
+  type EditorSpec,
+  editorFor,
+  fromDatetimeLocal,
+  toDatetimeLocal,
+} from "@/lib/column-editor";
+
+function isLongEditor(kind: EditorKind): boolean {
+  return kind === "textarea" || kind === "json";
+}
+
+import {
   type CellChange,
   type ColumnInfo,
   commitEdits,
@@ -10,7 +22,13 @@ import {
 } from "@/lib/tauri";
 
 const PAGE_SIZE = 500;
-const COL_WIDTH = 180;
+const MIN_COL_WIDTH = 80;
+const MAX_COL_WIDTH = 480;
+const MEASURE_PADDING = 32;
+/** 列幅測定に使う行の上限 (多すぎると重いので抑える) */
+const MEASURE_SAMPLE = 200;
+/** 1 セルで測る文字数の上限 (長文テキストで爆発しないように) */
+const MEASURE_CELL_MAX = 120;
 
 type Props = {
   connectionId: string;
@@ -119,7 +137,34 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     }
   }, [virtualItems, state.reachedEnd, state.loading, state.rows.length, loadPage]);
 
-  const colWidths = useMemo(() => state.columnNames.map(() => COL_WIDTH), [state.columnNames]);
+  // 列幅はヘッダ + サンプル行からコンテンツ長を測って決める。
+  // canvas.measureText を使い、CJK 含めて実幅で計算する。
+  const measureCtx = useMemo(() => {
+    if (typeof document === "undefined") return null;
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      // TableView のセル文字と同じフォント指定
+      ctx.font = '14px "Geist Variable", ui-sans-serif, system-ui, sans-serif';
+    }
+    return ctx;
+  }, []);
+
+  const colWidths = useMemo(() => {
+    const measure = (s: string) => measureCtx?.measureText(s).width ?? s.length * 7.5;
+    return state.columnNames.map((name, colIdx) => {
+      let maxW = measure(name) + 40; // ヘッダは PK バッジの余白込み
+      const limit = Math.min(state.rows.length, MEASURE_SAMPLE);
+      for (let r = 0; r < limit; r++) {
+        const v = state.rows[r]?.[colIdx];
+        if (v == null) continue;
+        const text = v.length > MEASURE_CELL_MAX ? v.slice(0, MEASURE_CELL_MAX) : v;
+        const w = measure(text);
+        if (w > maxW) maxW = w;
+      }
+      return Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.ceil(maxW) + MEASURE_PADDING));
+    });
+  }, [state.columnNames, state.rows, measureCtx]);
   const totalWidth = colWidths.reduce((a, b) => a + b, 0);
 
   const editCount = Object.keys(edits).length;
@@ -299,7 +344,12 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                     const value = cellValue(rowIdx, colIdx);
                     const dirty = isDirty(rowIdx, colIdx);
                     const canEdit = canEditCell(colIdx);
+                    const col = columns[colIdx] ?? null;
+                    const kind: EditorKind = col ? editorFor(col).kind : "text";
+                    const longKind = isLongEditor(kind);
                     const isEditing = editing?.row === rowIdx && editing.col === colIdx;
+                    // 長いテキストは別モーダルで編集するのでインライン描画しない
+                    const inlineEditing = isEditing && !longKind;
 
                     return (
                       // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
@@ -322,9 +372,11 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                         }}
                         title={canEdit ? "double-click or Enter to edit" : undefined}
                       >
-                        {isEditing ? (
-                          <EditInput
-                            initial={value ?? ""}
+                        {inlineEditing ? (
+                          <TypedEditor
+                            column={col}
+                            columnName={state.columnNames[colIdx] ?? ""}
+                            initial={value}
                             onCommit={(v) => {
                               setCell(rowIdx, colIdx, v);
                               setEditing(null);
@@ -364,56 +416,488 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           error={commitError}
         />
       )}
+
+      {(() => {
+        if (!editing) return null;
+        const col = columns[editing.col] ?? null;
+        if (!col) return null;
+        const spec = editorFor(col);
+        if (!isLongEditor(spec.kind)) return null;
+        const currentValue = cellValue(editing.row, editing.col);
+        return (
+          <LongFieldEditorModal
+            column={col}
+            columnName={state.columnNames[editing.col] ?? col.name}
+            initial={currentValue}
+            kind={spec.kind}
+            onCommit={(v) => {
+              if (editing) {
+                setCell(editing.row, editing.col, v);
+                setEditing(null);
+              }
+            }}
+            onCancel={() => setEditing(null)}
+          />
+        );
+      })()}
     </div>
   );
 }
 
-function EditInput({
+function TypedEditor({
+  column,
+  columnName,
   initial,
   onCommit,
   onCancel,
 }: {
-  initial: string;
+  column: ColumnInfo | null;
+  columnName: string;
+  initial: string | null;
   onCommit: (v: string | null) => void;
   onCancel: () => void;
 }) {
+  const spec: EditorSpec = column ? editorFor(column) : { kind: "text" };
+  const allowNull = column?.nullable ?? true;
+
+  const commonKeyDown = (e: React.KeyboardEvent<HTMLElement>) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      onCancel();
+    } else if (e.key === "Enter" && !e.shiftKey) {
+      e.preventDefault();
+      e.currentTarget.blur();
+    }
+  };
+
+  const nullButton = allowNull ? (
+    <button
+      type="button"
+      onMouseDown={(e) => {
+        e.preventDefault();
+        onCommit(null);
+      }}
+      className="shrink-0 rounded-sm border border-border px-1 text-[0.6rem] text-muted-foreground hover:text-destructive"
+      title="Set NULL"
+      tabIndex={-1}
+    >
+      ∅
+    </button>
+  ) : null;
+
+  if (spec.kind === "boolean") {
+    return <BooleanEditor initial={initial} onCommit={onCommit} nullButton={nullButton} />;
+  }
+
+  if (spec.kind === "enum" && spec.options) {
+    return (
+      <SelectEditor
+        initial={initial ?? ""}
+        options={spec.options}
+        allowEmpty={allowNull}
+        onCommit={onCommit}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  if (spec.kind === "datetime") {
+    return (
+      <TextishEditor
+        type="datetime-local"
+        initial={toDatetimeLocal(initial)}
+        onCommit={(v) => onCommit(v === "" ? null : fromDatetimeLocal(v))}
+        onKeyDown={commonKeyDown}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  if (spec.kind === "date") {
+    return (
+      <TextishEditor
+        type="date"
+        initial={initial ?? ""}
+        onCommit={(v) => onCommit(v === "" ? null : v)}
+        onKeyDown={commonKeyDown}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  if (spec.kind === "time") {
+    return (
+      <TextishEditor
+        type="time"
+        initial={initial ?? ""}
+        onCommit={(v) => onCommit(v === "" ? null : v)}
+        onKeyDown={commonKeyDown}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  if (spec.kind === "year") {
+    return (
+      <TextishEditor
+        type="number"
+        step="1"
+        initial={initial ?? ""}
+        onCommit={(v) => onCommit(v === "" ? null : v)}
+        onKeyDown={commonKeyDown}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  if (spec.kind === "number" || spec.kind === "decimal") {
+    return (
+      <TextishEditor
+        type="number"
+        step={spec.step ?? "any"}
+        initial={initial ?? ""}
+        onCommit={(v) => onCommit(v === "" ? null : v)}
+        onKeyDown={commonKeyDown}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  if (spec.kind === "json" || spec.kind === "textarea") {
+    return (
+      <TextareaEditor
+        initial={initial ?? ""}
+        placeholder={spec.kind === "json" ? "JSON" : columnName}
+        onCommit={(v) => onCommit(v)}
+        onCancel={onCancel}
+        nullButton={nullButton}
+      />
+    );
+  }
+
+  // default: plain text
+  return (
+    <TextishEditor
+      type="text"
+      initial={initial ?? ""}
+      onCommit={(v) => onCommit(v)}
+      onKeyDown={commonKeyDown}
+      nullButton={nullButton}
+    />
+  );
+}
+
+function TextishEditor({
+  type,
+  step,
+  initial,
+  onCommit,
+  onKeyDown,
+  nullButton,
+}: {
+  type: string;
+  step?: string;
+  initial: string;
+  onCommit: (v: string) => void;
+  onKeyDown: (e: React.KeyboardEvent<HTMLElement>) => void;
+  nullButton: React.ReactNode;
+}) {
   const [value, setValue] = useState(initial);
-  const inputRef = useRef<HTMLInputElement>(null);
-
+  const ref = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    inputRef.current?.focus();
-    inputRef.current?.select();
-  }, []);
-
+    ref.current?.focus();
+    if (type === "text") ref.current?.select();
+  }, [type]);
   return (
     <div className="flex items-center gap-1">
       <input
-        ref={inputRef}
+        ref={ref}
+        type={type}
+        step={step}
         value={value}
         onChange={(e) => setValue(e.currentTarget.value)}
         onBlur={() => onCommit(value)}
+        onKeyDown={onKeyDown}
+        className="h-5 w-full rounded-sm border border-accent bg-background px-1 text-sm outline-none"
+      />
+      {nullButton}
+    </div>
+  );
+}
+
+function SelectEditor({
+  initial,
+  options,
+  allowEmpty,
+  onCommit,
+  nullButton,
+}: {
+  initial: string;
+  options: string[];
+  allowEmpty: boolean;
+  onCommit: (v: string | null) => void;
+  nullButton: React.ReactNode;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLSelectElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        ref={ref}
+        value={value}
+        onChange={(e) => setValue(e.currentTarget.value)}
+        onBlur={() => onCommit(value === "" ? null : value)}
         onKeyDown={(e) => {
-          if (e.key === "Enter") {
+          if (e.key === "Escape") {
             e.preventDefault();
-            onCommit(value);
-          } else if (e.key === "Escape") {
+            onCommit(initial === "" ? null : initial);
+          } else if (e.key === "Enter") {
             e.preventDefault();
-            onCancel();
+            e.currentTarget.blur();
           }
         }}
         className="h-5 w-full rounded-sm border border-accent bg-background px-1 text-sm outline-none"
-      />
-      <button
-        type="button"
-        onMouseDown={(e) => {
-          e.preventDefault();
-          onCommit(null);
-        }}
-        className="shrink-0 rounded-sm border border-border px-1 text-[0.6rem] text-muted-foreground hover:text-destructive"
-        title="Set NULL"
       >
-        ∅
-      </button>
+        {allowEmpty && <option value="">(unset)</option>}
+        {options.map((opt) => (
+          <option key={opt} value={opt}>
+            {opt}
+          </option>
+        ))}
+      </select>
+      {nullButton}
+    </div>
+  );
+}
+
+function BooleanEditor({
+  initial,
+  onCommit,
+  nullButton,
+}: {
+  initial: string | null;
+  onCommit: (v: string | null) => void;
+  nullButton: React.ReactNode;
+}) {
+  const current = initial === "1" ? "1" : initial === "0" ? "0" : "";
+  const ref = useRef<HTMLSelectElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+  }, []);
+  return (
+    <div className="flex items-center gap-1">
+      <select
+        ref={ref}
+        value={current}
+        onChange={(e) => onCommit(e.currentTarget.value === "" ? null : e.currentTarget.value)}
+        onBlur={() => onCommit(current === "" ? null : current)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCommit(initial);
+          }
+        }}
+        className="h-5 w-full rounded-sm border border-accent bg-background px-1 text-sm outline-none"
+      >
+        <option value="">—</option>
+        <option value="1">true (1)</option>
+        <option value="0">false (0)</option>
+      </select>
+      {nullButton}
+    </div>
+  );
+}
+
+function TextareaEditor({
+  initial,
+  placeholder,
+  onCommit,
+  onCancel,
+  nullButton,
+}: {
+  initial: string;
+  placeholder: string;
+  onCommit: (v: string) => void;
+  onCancel: () => void;
+  nullButton: React.ReactNode;
+}) {
+  const [value, setValue] = useState(initial);
+  const ref = useRef<HTMLTextAreaElement>(null);
+  useEffect(() => {
+    ref.current?.focus();
+    ref.current?.select();
+  }, []);
+  return (
+    <div className="flex items-start gap-1">
+      <textarea
+        ref={ref}
+        value={value}
+        placeholder={placeholder}
+        rows={3}
+        onChange={(e) => setValue(e.currentTarget.value)}
+        onBlur={() => onCommit(value)}
+        onKeyDown={(e) => {
+          if (e.key === "Escape") {
+            e.preventDefault();
+            onCancel();
+          } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+            e.preventDefault();
+            onCommit(value);
+          }
+        }}
+        className="h-16 w-full resize-y rounded-sm border border-accent bg-background p-1 font-mono text-xs outline-none"
+      />
+      {nullButton}
+    </div>
+  );
+}
+
+function LongFieldEditorModal({
+  column,
+  columnName,
+  initial,
+  kind,
+  onCommit,
+  onCancel,
+}: {
+  column: ColumnInfo;
+  columnName: string;
+  initial: string | null;
+  kind: EditorKind;
+  onCommit: (v: string | null) => void;
+  onCancel: () => void;
+}) {
+  const [value, setValue] = useState<string>(initial ?? "");
+  const [isNull, setIsNull] = useState(initial === null);
+  const [error, setError] = useState<string | null>(null);
+  const ref = useRef<HTMLTextAreaElement>(null);
+
+  useEffect(() => {
+    if (!isNull) ref.current?.focus();
+  }, [isNull]);
+
+  function save() {
+    if (isNull) {
+      onCommit(null);
+      return;
+    }
+    if (kind === "json") {
+      try {
+        // 空でなければ JSON として成立するかチェック
+        if (value.trim() !== "") JSON.parse(value);
+      } catch (e) {
+        setError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
+        return;
+      }
+    }
+    onCommit(value);
+  }
+
+  function formatJson() {
+    try {
+      const parsed = JSON.parse(value);
+      setValue(JSON.stringify(parsed, null, 2));
+      setError(null);
+    } catch (e) {
+      setError(`Invalid JSON: ${e instanceof Error ? e.message : String(e)}`);
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-6">
+      <div className="flex h-[70vh] w-full max-w-4xl flex-col overflow-hidden rounded-md border border-border bg-card shadow-xl">
+        <header className="flex items-baseline justify-between border-b border-border px-5 py-3">
+          <div className="flex flex-col">
+            <span className="text-xs uppercase tracking-wide text-muted-foreground">
+              {kind === "json" ? "JSON" : "Text"}
+            </span>
+            <h2 className="text-base font-semibold">
+              {columnName}{" "}
+              <span className="text-xs font-normal text-muted-foreground">
+                {column.data_type}
+                {column.nullable ? "" : " · NOT NULL"}
+              </span>
+            </h2>
+          </div>
+          <div className="flex items-center gap-2">
+            {column.nullable && (
+              <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={isNull}
+                  onChange={(e) => {
+                    setIsNull(e.currentTarget.checked);
+                    setError(null);
+                  }}
+                  className="h-3.5 w-3.5 accent-accent"
+                />
+                <span>NULL</span>
+              </label>
+            )}
+            {kind === "json" && (
+              <button
+                type="button"
+                onClick={formatJson}
+                disabled={isNull}
+                className="rounded-md border border-border px-2 py-1 text-xs text-muted-foreground hover:text-foreground disabled:opacity-50"
+              >
+                Format
+              </button>
+            )}
+          </div>
+        </header>
+        <div className="flex min-h-0 flex-1 flex-col">
+          <textarea
+            ref={ref}
+            value={isNull ? "" : value}
+            disabled={isNull}
+            onChange={(e) => {
+              setValue(e.currentTarget.value);
+              setError(null);
+            }}
+            onKeyDown={(e) => {
+              if (e.key === "Escape") {
+                e.preventDefault();
+                onCancel();
+              } else if (e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+                e.preventDefault();
+                save();
+              }
+            }}
+            spellCheck={false}
+            className="flex-1 resize-none bg-background p-4 font-mono text-sm text-foreground outline-none disabled:bg-muted/20 disabled:text-muted-foreground"
+          />
+        </div>
+        {error && (
+          <p className="mx-5 mb-0 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+            {error}
+          </p>
+        )}
+        <footer className="flex items-center justify-between gap-2 border-t border-border px-5 py-3">
+          <span className="text-xs text-muted-foreground">
+            {isNull ? "NULL" : `${value.length.toLocaleString()} chars`}
+          </span>
+          <div className="flex gap-2">
+            <button
+              type="button"
+              onClick={onCancel}
+              className="rounded-md border border-border bg-secondary px-3 py-1.5 text-sm"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={save}
+              className="rounded-md border border-accent bg-accent px-3 py-1.5 text-sm font-semibold text-accent-foreground"
+            >
+              OK
+            </button>
+          </div>
+        </footer>
+      </div>
     </div>
   );
 }
