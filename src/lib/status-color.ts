@@ -58,11 +58,16 @@ export function ringColorFor(color: StatusColor): string {
   return palette[color].ring;
 }
 
+function isStatusColor(v: string | null | undefined): v is StatusColor {
+  return typeof v === "string" && (STATUS_COLORS as string[]).includes(v);
+}
+
 /**
- * Stable auto-pick for a color based on the connection name so existing
- * connections get a distinct avatar without a stored preference yet.
+ * 接続色の決定: 明示ラベルがあればそれを使う。なければ name から hash 由来で
+ * 安定的に決める (prod=red などの誤爆防止ラベル優先)。
  */
-export function colorForName(name: string): StatusColor {
+export function colorForName(name: string, override?: string | null | undefined): StatusColor {
+  if (isStatusColor(override)) return override;
   if (!name) return "gray";
   let hash = 0;
   for (let i = 0; i < name.length; i++) {

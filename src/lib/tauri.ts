@@ -34,6 +34,7 @@ export type ConnectionConfig = {
 export type SaveConnectionInput = ConnectionConfig & {
   name: string;
   history_enabled: boolean;
+  color_label: string | null;
 };
 
 export type SavedSslConfig = {
@@ -62,6 +63,7 @@ export type SavedConnection = {
   ssh: SavedSshConfig | null;
   enable_cleartext_plugin: boolean;
   history_enabled: boolean;
+  color_label: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -87,6 +89,7 @@ export type UpdateConnectionInput = {
   ssh: SshConfigInput | null;
   enable_cleartext_plugin: boolean;
   history_enabled: boolean;
+  color_label: string | null;
 };
 
 export function updateConnection(input: UpdateConnectionInput): Promise<SavedConnection> {

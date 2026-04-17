@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { colorForName, initialsOf, ringColorFor, statusColorVars } from "@/lib/status-color";
 import type { SavedConnection } from "@/lib/tauri";
 
@@ -32,24 +33,77 @@ type Props = {
   onSelect: (id: string) => void;
   onClose: (id: string) => void;
   onNew: () => void;
+  /** タブを draggingId の位置から targetId の位置 (before/after) に移動 */
+  onReorder: (draggingId: string, targetId: string, position: "before" | "after") => void;
 };
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: Props) {
+type DragState = {
+  draggingId: string;
+  overId: string | null;
+  position: "before" | "after" | null;
+};
+
+export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder }: Props) {
+  const [drag, setDrag] = useState<DragState | null>(null);
+
+  function handleDragStart(e: React.DragEvent, id: string) {
+    e.dataTransfer.setData("text/plain", id);
+    e.dataTransfer.effectAllowed = "move";
+    setDrag({ draggingId: id, overId: null, position: null });
+  }
+
+  function handleDragOver(e: React.DragEvent, id: string) {
+    if (!drag || drag.draggingId === id) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "move";
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const mid = rect.left + rect.width / 2;
+    const position: "before" | "after" = e.clientX < mid ? "before" : "after";
+    if (drag.overId !== id || drag.position !== position) {
+      setDrag({ ...drag, overId: id, position });
+    }
+  }
+
+  function handleDrop(e: React.DragEvent, id: string) {
+    e.preventDefault();
+    if (!drag || drag.draggingId === id || !drag.position) {
+      setDrag(null);
+      return;
+    }
+    onReorder(drag.draggingId, id, drag.position);
+    setDrag(null);
+  }
+
+  function handleDragEnd() {
+    setDrag(null);
+  }
+
   return (
     <div className="flex h-10 shrink-0 items-stretch border-b border-border bg-sidebar/30 backdrop-blur-[1px]">
       <div className="flex min-w-0 flex-1 overflow-x-auto">
         {tabs.map((tab) => {
           const active = tab.id === activeTabId;
-          const color = colorForName(tab.connection.name);
+          const color = colorForName(tab.connection.name, tab.connection.color_label);
           const ring = ringColorFor(color);
+          const isDragging = drag?.draggingId === tab.id;
+          const showIndicatorBefore = drag?.overId === tab.id && drag.position === "before";
+          const showIndicatorAfter = drag?.overId === tab.id && drag.position === "after";
           return (
             <div
               key={tab.id}
+              role="tab"
+              aria-selected={active}
+              tabIndex={-1}
+              draggable
+              onDragStart={(e) => handleDragStart(e, tab.id)}
+              onDragOver={(e) => handleDragOver(e, tab.id)}
+              onDrop={(e) => handleDrop(e, tab.id)}
+              onDragEnd={handleDragEnd}
               className={`group relative flex h-full max-w-[320px] shrink-0 items-stretch overflow-hidden border-r border-border/70 transition-colors ${
                 active
                   ? "bg-background text-foreground"
                   : "bg-transparent text-muted-foreground hover:bg-sidebar-accent/30 hover:text-foreground"
-              }`}
+              } ${isDragging ? "opacity-50" : ""}`}
             >
               {/* Active indicator — a 2px bar colored after the connection */}
               {active && (
@@ -59,6 +113,22 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: Props) {
                   style={{
                     backgroundImage: `linear-gradient(90deg, transparent, ${ring} 15%, ${ring} 85%, transparent)`,
                   }}
+                />
+              )}
+
+              {/* Drop indicator (left/right edge) */}
+              {showIndicatorBefore && (
+                <span
+                  aria-hidden
+                  className="absolute inset-y-0 left-0 w-[2px]"
+                  style={{ backgroundColor: "var(--accent)" }}
+                />
+              )}
+              {showIndicatorAfter && (
+                <span
+                  aria-hidden
+                  className="absolute inset-y-0 right-0 w-[2px]"
+                  style={{ backgroundColor: "var(--accent)" }}
                 />
               )}
 
@@ -125,7 +195,7 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: Props) {
 }
 
 function ConnectionBadge({ connection }: { connection: SavedConnection }) {
-  const color = colorForName(connection.name);
+  const color = colorForName(connection.name, connection.color_label);
   return (
     <span
       className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[0.58rem] font-semibold shadow-[0_1px_0_oklch(0_0_0/30%),inset_0_1px_0_oklch(1_0_0/15%)]"

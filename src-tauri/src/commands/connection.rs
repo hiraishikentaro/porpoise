@@ -43,6 +43,8 @@ pub struct SaveConnectionInput {
     /// クエリ履歴を記録するか (default true)
     #[serde(default = "default_true")]
     pub history_enabled: bool,
+    #[serde(default)]
+    pub color_label: Option<String>,
 }
 
 fn default_true() -> bool {
@@ -72,6 +74,7 @@ pub async fn save_connection(
                 ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
                 enable_cleartext_plugin: input.enable_cleartext_plugin,
                 history_enabled: input.history_enabled,
+                color_label: input.color_label.as_deref(),
             },
         )?
     };
@@ -134,6 +137,8 @@ pub struct UpdateConnectionInput {
     pub enable_cleartext_plugin: bool,
     #[serde(default = "default_true")]
     pub history_enabled: bool,
+    #[serde(default)]
+    pub color_label: Option<String>,
 }
 
 #[tauri::command]
@@ -169,6 +174,7 @@ pub async fn update_connection(
                 ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
                 enable_cleartext_plugin: input.enable_cleartext_plugin,
                 history_enabled: input.history_enabled,
+                color_label: input.color_label.as_deref(),
             },
         )?
     };

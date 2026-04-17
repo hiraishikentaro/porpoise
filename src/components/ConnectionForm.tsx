@@ -32,6 +32,7 @@ type FormValues = {
   sslClientKeyPath: string;
   enableCleartextPlugin: boolean;
   historyEnabled: boolean;
+  colorLabel: string;
   sshEnabled: boolean;
   sshHost: string;
   sshPort: number;
@@ -61,6 +62,7 @@ const defaultValues: FormValues = {
   sslClientKeyPath: "",
   enableCleartextPlugin: false,
   historyEnabled: true,
+  colorLabel: "",
   sshEnabled: false,
   sshHost: "",
   sshPort: 22,
@@ -100,6 +102,7 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
         sslClientKeyPath: initial.ssl.client_key_path ?? "",
         enableCleartextPlugin: initial.enable_cleartext_plugin,
         historyEnabled: initial.history_enabled,
+        colorLabel: initial.color_label ?? "",
         sshEnabled: initial.ssh !== null,
         sshHost: initial.ssh?.host ?? "",
         sshPort: initial.ssh?.port ?? 22,
@@ -165,6 +168,7 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
 
   async function persistValues(): Promise<SavedConnection> {
     const config = toConfig();
+    const colorLabel = values.colorLabel ? values.colorLabel : null;
     if (initial) {
       return await updateConnection({
         id: initial.id,
@@ -178,12 +182,14 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
         ssh: config.ssh,
         enable_cleartext_plugin: config.enable_cleartext_plugin,
         history_enabled: values.historyEnabled,
+        color_label: colorLabel,
       });
     }
     return await saveConnection({
       ...config,
       name: values.name.trim(),
       history_enabled: values.historyEnabled,
+      color_label: colorLabel,
     });
   }
 
@@ -362,6 +368,17 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
           </label>
         </Row>
 
+        <Row label="Color">
+          <div className="flex items-center gap-2 py-1">
+            <ColorPicker value={values.colorLabel} onChange={(v) => update("colorLabel", v)} />
+            <span className="text-xs text-muted-foreground">
+              {values.colorLabel
+                ? "タブ / アバターの色に反映 (prod=red などで誤爆防止)"
+                : "未設定: 名前からの自動配色"}
+            </span>
+          </div>
+        </Row>
+
         {!showCaCert && values.sslMode === "disabled" && null}
       </div>
 
@@ -497,6 +514,55 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
         )}
       </footer>
     </article>
+  );
+}
+
+const COLOR_CHOICES: {
+  value: string;
+  label: string;
+  bg: string;
+}[] = [
+  { value: "", label: "auto", bg: "transparent" },
+  { value: "gray", label: "gray", bg: "oklch(0.5 0.015 250)" },
+  { value: "blue", label: "blue", bg: "oklch(0.55 0.18 252)" },
+  { value: "amber", label: "amber", bg: "oklch(0.74 0.16 68)" },
+  { value: "green", label: "green", bg: "oklch(0.62 0.16 148)" },
+  { value: "red", label: "red / prod", bg: "oklch(0.6 0.22 22)" },
+  { value: "pink", label: "pink", bg: "oklch(0.68 0.2 340)" },
+];
+
+function ColorPicker({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  return (
+    <div className="flex flex-wrap items-center gap-1.5">
+      {COLOR_CHOICES.map((c) => {
+        const selected = value === c.value;
+        return (
+          <button
+            key={c.value || "auto"}
+            type="button"
+            onClick={() => onChange(c.value)}
+            className={`inline-flex h-6 items-center gap-1.5 rounded-md border px-1.5 text-[0.65rem] transition-colors ${
+              selected
+                ? "border-accent bg-accent/10 text-foreground shadow-[0_0_0_2px_var(--accent-glow)]"
+                : "border-border text-muted-foreground hover:border-accent/60 hover:text-foreground"
+            }`}
+            title={c.label}
+          >
+            <span
+              aria-hidden
+              className="inline-block h-3 w-3 rounded-full border border-border/70"
+              style={{
+                background:
+                  c.value === ""
+                    ? "repeating-linear-gradient(45deg, oklch(0.45 0.01 240), oklch(0.45 0.01 240) 2px, transparent 2px, transparent 4px)"
+                    : c.bg,
+              }}
+            />
+            <span>{c.label}</span>
+          </button>
+        );
+      })}
+    </div>
   );
 }
 

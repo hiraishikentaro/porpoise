@@ -176,7 +176,7 @@ export function SavedConnections({
             const open = activeIds.has(conn.id);
             const isOpening = pending?.kind === "open" && pending.id === conn.id;
             const isClosing = pending?.kind === "close" && pending.id === conn.id;
-            const color = colorForName(conn.name);
+            const color = colorForName(conn.name, conn.color_label);
             const local = isLocalHost(conn.host);
 
             return (

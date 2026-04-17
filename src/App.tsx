@@ -18,6 +18,108 @@ const tableTabId = (connId: string, database: string, table: string) =>
 const newEditorTabId = () =>
   `editor:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
+const PERSIST_KEY = "porpoise.tabs.v1";
+
+type PersistedTab =
+  | { id: string; kind: "connection"; connectionId: string }
+  | { id: string; kind: "table"; connectionId: string; database: string; table: string }
+  | {
+      id: string;
+      kind: "editor";
+      connectionId: string;
+      title: string;
+      sql: string;
+      database: string | null;
+    };
+
+type PersistedState = {
+  tabs: PersistedTab[];
+  activeTabId: string | null;
+  editorSeq: number;
+};
+
+function readPersisted(): PersistedState | null {
+  try {
+    const raw = localStorage.getItem(PERSIST_KEY);
+    if (!raw) return null;
+    const parsed = JSON.parse(raw) as PersistedState;
+    if (!parsed || !Array.isArray(parsed.tabs)) return null;
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function serializeTabs(tabs: Tab[], activeTabId: string | null, editorSeq: number): PersistedState {
+  return {
+    tabs: tabs.map((t): PersistedTab => {
+      if (t.kind === "connection") {
+        return { id: t.id, kind: "connection", connectionId: t.connection.id };
+      }
+      if (t.kind === "table") {
+        return {
+          id: t.id,
+          kind: "table",
+          connectionId: t.connection.id,
+          database: t.database,
+          table: t.table,
+        };
+      }
+      return {
+        id: t.id,
+        kind: "editor",
+        connectionId: t.connection.id,
+        title: t.title,
+        sql: t.sql,
+        database: t.database,
+      };
+    }),
+    activeTabId,
+    editorSeq,
+  };
+}
+
+function hydrateTabs(
+  persisted: PersistedState,
+  connectionsById: Map<string, SavedConnection>,
+  activeIds: Set<string>,
+): { tabs: Tab[]; activeTabId: string | null } {
+  const restored: Tab[] = [];
+  for (const p of persisted.tabs) {
+    const conn = connectionsById.get(p.connectionId);
+    if (!conn) continue;
+    // 接続がまだ open でなければタブを復元しない
+    // (接続を開く時に復元されるため二重にならない)
+    if (!activeIds.has(p.connectionId)) continue;
+    if (p.kind === "connection") {
+      restored.push({ id: p.id, kind: "connection", connection: conn });
+    } else if (p.kind === "table") {
+      restored.push({
+        id: p.id,
+        kind: "table",
+        connection: conn,
+        database: p.database,
+        table: p.table,
+      });
+    } else {
+      restored.push({
+        id: p.id,
+        kind: "editor",
+        connection: conn,
+        title: p.title,
+        sql: p.sql,
+        database: p.database,
+      });
+    }
+  }
+  const activeStillExists =
+    persisted.activeTabId && restored.some((t) => t.id === persisted.activeTabId);
+  return {
+    tabs: restored,
+    activeTabId: activeStillExists ? persisted.activeTabId : (restored[0]?.id ?? null),
+  };
+}
+
 function App() {
   const [selected, setSelected] = useState<SavedConnection | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
@@ -34,6 +136,29 @@ function App() {
         const [ids, list] = await Promise.all([activeConnections(), listConnections()]);
         const idSet = new Set(ids);
         setActiveIds(idSet);
+        const connectionsById = new Map(list.map((c) => [c.id, c]));
+        const persisted = readPersisted();
+        if (persisted) {
+          const { tabs: restored, activeTabId: nextActive } = hydrateTabs(
+            persisted,
+            connectionsById,
+            idSet,
+          );
+          // 永続化されていない接続タブ (新規 open 中など) を補完
+          for (const id of idSet) {
+            if (!restored.some((t) => t.id === connectionTabId(id))) {
+              const conn = connectionsById.get(id);
+              if (conn) {
+                restored.push({ id: connectionTabId(id), kind: "connection", connection: conn });
+              }
+            }
+          }
+          setTabs(restored);
+          setActiveTabId(nextActive ?? restored[0]?.id ?? null);
+          setEditorSeq(Math.max(1, persisted.editorSeq));
+          return;
+        }
+        // フォールバック: 永続化なし → 開いている接続だけ connection タブにする
         const restored: Tab[] = list
           .filter((c) => idSet.has(c.id))
           .map((c) => ({ id: connectionTabId(c.id), kind: "connection", connection: c }));
@@ -46,6 +171,16 @@ function App() {
       }
     })();
   }, []);
+
+  // 変更のたびに localStorage に保存 (render 中ではないので useEffect で debounce 不要)
+  useEffect(() => {
+    try {
+      const serialized = serializeTabs(tabs, activeTabId, editorSeq);
+      localStorage.setItem(PERSIST_KEY, JSON.stringify(serialized));
+    } catch {
+      // noop — quota exceeded などは無視
+    }
+  }, [tabs, activeTabId, editorSeq]);
 
   const upsertConnectionTab = useCallback((conn: SavedConnection) => {
     setTabs((prev) => {
@@ -90,6 +225,24 @@ function App() {
       prev.map((t) => (t.id === id && t.kind === "editor" ? { ...t, database } : t)),
     );
   }, []);
+
+  const reorderTabs = useCallback(
+    (draggingId: string, targetId: string, position: "before" | "after") => {
+      setTabs((prev) => {
+        const from = prev.findIndex((t) => t.id === draggingId);
+        if (from < 0) return prev;
+        const dragged = prev[from];
+        const without = prev.filter((t) => t.id !== draggingId);
+        const targetIdx = without.findIndex((t) => t.id === targetId);
+        if (targetIdx < 0) return prev;
+        const insertAt = position === "before" ? targetIdx : targetIdx + 1;
+        const next = [...without];
+        next.splice(insertAt, 0, dragged);
+        return next;
+      });
+    },
+    [],
+  );
 
   const removeTab = useCallback(
     (id: string) => {
@@ -269,6 +422,7 @@ function App() {
           onSelect={handleSelectTab}
           onClose={handleCloseTab}
           onNew={handleNewTab}
+          onReorder={reorderTabs}
         />
 
         <div className="flex min-h-0 flex-1 flex-col">

@@ -94,6 +94,8 @@ pub struct SavedConnection {
     pub enable_cleartext_plugin: bool,
     /// クエリ履歴の自動保存を有効にするかどうか (プライバシー設定)
     pub history_enabled: bool,
+    /// 接続のカラーラベル (prod=red など誤爆防止用)。null なら name hash 由来。
+    pub color_label: Option<String>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -137,6 +139,7 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         ("ssh_key_path", "TEXT"),
         ("enable_cleartext_plugin", "INTEGER NOT NULL DEFAULT 0"),
         ("history_enabled", "INTEGER NOT NULL DEFAULT 1"),
+        ("color_label", "TEXT"),
     ];
     for (name, decl) in additions {
         if !existing_cols.iter().any(|c| c == name) {
@@ -203,6 +206,7 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
     let ssh_enabled: i64 = row.get("ssh_enabled")?;
     let enable_cleartext: i64 = row.get("enable_cleartext_plugin")?;
     let history_enabled: i64 = row.get("history_enabled")?;
+    let color_label: Option<String> = row.get("color_label")?;
     let ssh = if ssh_enabled != 0 {
         let ssh_host: Option<String> = row.get("ssh_host")?;
         let ssh_port: Option<i64> = row.get("ssh_port")?;
@@ -260,6 +264,7 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
         ssh,
         enable_cleartext_plugin: enable_cleartext != 0,
         history_enabled: history_enabled != 0,
+        color_label,
         created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
         updated_at: parse_ts(&row.get::<_, String>("updated_at")?)?,
     })
@@ -283,6 +288,7 @@ pub struct NewConnection<'a> {
     pub ssh: Option<SavedSshConfig>,
     pub enable_cleartext_plugin: bool,
     pub history_enabled: bool,
+    pub color_label: Option<&'a str>,
 }
 
 pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedConnection> {
@@ -299,9 +305,9 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
             (id, name, host, port, username, database, use_ssl,
              ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
              ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
-             enable_cleartext_plugin, history_enabled,
+             enable_cleartext_plugin, history_enabled, color_label,
              created_at, updated_at)
-         VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?,  ?, ?)",
+         VALUES (?, ?, ?, ?, ?, ?, ?,  ?, ?, ?, ?,  ?, ?, ?, ?, ?, ?,  ?, ?, ?,  ?, ?)",
         params![
             id.to_string(),
             input.name,
@@ -328,6 +334,7 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
             input.ssh.as_ref().and_then(|s| s.key_path.clone()),
             i64::from(input.enable_cleartext_plugin),
             i64::from(input.history_enabled),
+            input.color_label,
             now_str,
             now_str,
         ],
@@ -344,6 +351,7 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
         ssh: input.ssh,
         enable_cleartext_plugin: input.enable_cleartext_plugin,
         history_enabled: input.history_enabled,
+        color_label: input.color_label.map(str::to_owned),
         created_at: now,
         updated_at: now,
     })
@@ -354,7 +362,7 @@ pub fn get(conn: &Connection, id: Uuid) -> AppResult<Option<SavedConnection>> {
         "SELECT id, name, host, port, username, database,
                 ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
                 ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
-                enable_cleartext_plugin, history_enabled,
+                enable_cleartext_plugin, history_enabled, color_label,
                 created_at, updated_at
          FROM saved_connections
          WHERE id = ?",
@@ -372,7 +380,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<SavedConnection>> {
         "SELECT id, name, host, port, username, database,
                 ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
                 ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
-                enable_cleartext_plugin, history_enabled,
+                enable_cleartext_plugin, history_enabled, color_label,
                 created_at, updated_at
          FROM saved_connections
          ORDER BY created_at ASC",
@@ -409,6 +417,7 @@ pub fn update(conn: &Connection, id: Uuid, input: NewConnection<'_>) -> AppResul
             ssh_auth_kind = ?, ssh_key_path = ?,
             enable_cleartext_plugin = ?,
             history_enabled = ?,
+            color_label = ?,
             updated_at = ?
          WHERE id = ?",
         params![
@@ -436,6 +445,7 @@ pub fn update(conn: &Connection, id: Uuid, input: NewConnection<'_>) -> AppResul
             input.ssh.as_ref().and_then(|s| s.key_path.clone()),
             i64::from(input.enable_cleartext_plugin),
             i64::from(input.history_enabled),
+            input.color_label,
             now_str,
             id.to_string(),
         ],
