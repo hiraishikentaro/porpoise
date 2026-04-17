@@ -2,12 +2,14 @@ mod commands;
 mod db;
 mod error;
 mod state;
+mod storage;
 
-use tracing_subscriber::{EnvFilter, fmt};
+use tauri::Manager;
+use tracing_subscriber::{fmt, EnvFilter};
 
 fn init_tracing() {
-    let filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("info,porpoise=debug"));
+    let filter =
+        EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,porpoise=debug"));
     fmt().with_env_filter(filter).with_target(true).init();
 }
 
@@ -18,8 +20,27 @@ pub fn run() {
 
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
-        .manage(state::AppState::default())
-        .invoke_handler(tauri::generate_handler![commands::connection::test_connection])
+        .setup(|app| {
+            let data_dir = app
+                .path()
+                .app_local_data_dir()
+                .map_err(|e| error::AppError::Setup(e.to_string()))?;
+            std::fs::create_dir_all(&data_dir)
+                .map_err(|e| error::AppError::Setup(e.to_string()))?;
+            let db_path = data_dir.join("connections.db");
+            tracing::info!(path = %db_path.display(), "opening local db");
+            let conn = storage::local_db::open(&db_path)?;
+            app.manage(state::AppState {
+                local_db: std::sync::Mutex::new(conn),
+            });
+            Ok(())
+        })
+        .invoke_handler(tauri::generate_handler![
+            commands::connection::test_connection,
+            commands::connection::save_connection,
+            commands::connection::list_connections,
+            commands::connection::delete_connection,
+        ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
 }

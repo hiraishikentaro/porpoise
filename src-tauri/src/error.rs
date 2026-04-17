@@ -4,6 +4,18 @@ use serde::{Serialize, Serializer};
 pub enum AppError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+
+    #[error("local db error: {0}")]
+    LocalDb(#[from] rusqlite::Error),
+
+    #[error("keychain error: {0}")]
+    Keychain(#[from] keyring::Error),
+
+    #[error("setup error: {0}")]
+    Setup(String),
+
+    #[error("invalid data: {0}")]
+    InvalidData(String),
 }
 
 impl Serialize for AppError {
