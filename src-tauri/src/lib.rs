@@ -36,11 +36,15 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             commands::connection::test_connection,
             commands::connection::save_connection,
+            commands::connection::update_connection,
             commands::connection::list_connections,
             commands::connection::delete_connection,
             commands::connection::open_connection,
             commands::connection::close_connection,
             commands::connection::active_connections,
+            commands::schema::list_databases,
+            commands::schema::list_tables,
+            commands::schema::describe_table,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

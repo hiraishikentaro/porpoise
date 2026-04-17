@@ -14,9 +14,16 @@ use crate::storage::local_db::{self, SshAuthKind};
 #[tauri::command]
 pub async fn test_connection(config: ConnectionConfig) -> AppResult<String> {
     tracing::info!(host = %config.host, port = config.port, "testing connection");
-    let version = mysql_client::test_connection(&config).await?;
-    tracing::info!(%version, "connection ok");
-    Ok(version)
+    match mysql_client::test_connection(&config).await {
+        Ok(version) => {
+            tracing::info!(%version, "connection ok");
+            Ok(version)
+        }
+        Err(e) => {
+            tracing::warn!(error = %e, host = %config.host, "test_connection failed");
+            Err(e)
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -100,6 +107,98 @@ pub async fn list_connections(
     local_db::list(&conn)
 }
 
+#[derive(Debug, Deserialize)]
+pub struct UpdateConnectionInput {
+    pub id: Uuid,
+    pub name: String,
+    pub host: String,
+    pub port: u16,
+    pub user: String,
+    /// 空文字なら keychain の既存値を保持する。
+    #[serde(default)]
+    pub password: Option<String>,
+    pub database: Option<String>,
+    #[serde(default)]
+    pub ssl: SslConfigInput,
+    #[serde(default)]
+    pub ssh: Option<SshConfigInput>,
+    #[serde(default)]
+    pub enable_cleartext_plugin: bool,
+}
+
+#[tauri::command]
+pub async fn update_connection(
+    state: State<'_, AppState>,
+    input: UpdateConnectionInput,
+) -> AppResult<local_db::SavedConnection> {
+    // 既に開いているプールがあればいったん閉じる (設定変更を反映させるため)
+    let active = {
+        let mut pools = state.pools.lock().expect("pools mutex poisoned");
+        pools.remove(&input.id)
+    };
+    if let Some(active) = active {
+        active.shutdown().await;
+    }
+
+    let saved = {
+        let conn = state.local_db.lock().expect("local_db mutex poisoned");
+        local_db::update(
+            &conn,
+            input.id,
+            local_db::NewConnection {
+                name: input.name.trim(),
+                host: input.host.trim(),
+                port: input.port,
+                user: input.user.trim(),
+                database: input
+                    .database
+                    .as_deref()
+                    .map(str::trim)
+                    .filter(|s| !s.is_empty()),
+                ssl: input.ssl.to_saved(),
+                ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
+                enable_cleartext_plugin: input.enable_cleartext_plugin,
+            },
+        )?
+    };
+
+    // DB パスワードは「空文字なら変更しない」方針
+    if let Some(pw) = input.password.as_deref() {
+        if !pw.is_empty() {
+            keychain::save(saved.id, Slot::DbPassword, pw)?;
+        }
+    }
+
+    // SSH の secret も同様に、空なら既存を保持。
+    // SSH 設定が外された (ssh: null) 場合は関連 keychain エントリを削除。
+    match &input.ssh {
+        None => {
+            let _ = keychain::delete(saved.id, Slot::SshPassword);
+            let _ = keychain::delete(saved.id, Slot::SshKeyPassphrase);
+        }
+        Some(ssh) => match &ssh.auth {
+            SshAuthInput::Password { password } => {
+                if !password.is_empty() {
+                    keychain::save(saved.id, Slot::SshPassword, password)?;
+                }
+                // 認証方式切り替え時の passphrase 残骸を除去
+                let _ = keychain::delete(saved.id, Slot::SshKeyPassphrase);
+            }
+            SshAuthInput::Key { passphrase, .. } => {
+                if let Some(pp) = passphrase.as_deref() {
+                    if !pp.is_empty() {
+                        keychain::save(saved.id, Slot::SshKeyPassphrase, pp)?;
+                    }
+                }
+                let _ = keychain::delete(saved.id, Slot::SshPassword);
+            }
+        },
+    }
+
+    tracing::info!(id = %saved.id, name = %saved.name, "updated connection");
+    Ok(saved)
+}
+
 #[tauri::command]
 pub async fn delete_connection(state: State<'_, AppState>, id: Uuid) -> AppResult<()> {
     // 開いているプールがあれば先に閉じる
@@ -150,8 +249,24 @@ pub async fn open_connection(
     let config = materialize_config(&saved)?;
 
     tracing::info!(%id, host = %config.host, ssh = config.ssh.is_some(), "opening connection");
-    let opened = mysql_client::open(&config).await?;
-    let version = mysql_client::fetch_version(&opened.pool).await?;
+    let opened = match mysql_client::open(&config).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%id, error = %e, "open_connection: pool creation failed");
+            return Err(e);
+        }
+    };
+    let version = match mysql_client::fetch_version(&opened.pool).await {
+        Ok(v) => v,
+        Err(e) => {
+            tracing::warn!(%id, error = %e, "open_connection: VERSION() failed");
+            opened.pool.disconnect().await.ok();
+            if let Some(t) = opened.tunnel {
+                t.shutdown().await;
+            }
+            return Err(e);
+        }
+    };
 
     {
         let mut pools = state.pools.lock().expect("pools mutex poisoned");

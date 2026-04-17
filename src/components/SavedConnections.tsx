@@ -75,11 +75,12 @@ export function SavedConnections({
     }
   }
 
-  async function handleOpen(id: string) {
-    setPending({ kind: "open", id });
+  async function handleOpen(conn: SavedConnection) {
+    setPending({ kind: "open", id: conn.id });
     setError(null);
     try {
-      const result = await openConnection(id);
+      const result = await openConnection(conn.id);
+      onSelect(conn);
       onOpened(result.id, result.version);
     } catch (err) {
       setError(String(err));
@@ -192,7 +193,7 @@ export function SavedConnections({
                         type="button"
                         onClick={(e) => {
                           e.stopPropagation();
-                          handleOpen(conn.id);
+                          handleOpen(conn);
                         }}
                         disabled={isOpening}
                         className="rounded-md border border-border px-2 py-0.5 text-xs text-foreground hover:border-accent hover:text-accent disabled:opacity-50"

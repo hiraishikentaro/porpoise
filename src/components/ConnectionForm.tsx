@@ -8,11 +8,13 @@ import {
 } from "@/components/ui/select";
 import {
   type ConnectionConfig,
+  openConnection,
   type SavedConnection,
   type SshAuthInput,
   type SslMode,
   saveConnection,
   testConnection,
+  updateConnection,
 } from "@/lib/tauri";
 
 type SshAuthKind = "password" | "key";
@@ -41,7 +43,7 @@ type FormValues = {
 
 type Status =
   | { kind: "idle" }
-  | { kind: "pending"; action: "test" | "save" }
+  | { kind: "pending"; action: "test" | "save" | "connect" }
   | { kind: "ok"; message: string }
   | { kind: "error"; message: string };
 
@@ -70,13 +72,14 @@ const defaultValues: FormValues = {
 type Props = {
   initial: SavedConnection | null;
   onSaved: (conn: SavedConnection) => void;
+  onOpened: (id: string, version: string) => void;
 };
 
 function optionalString(value: string): string | null {
   return value.trim() ? value.trim() : null;
 }
 
-export function ConnectionForm({ initial, onSaved }: Props) {
+export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
   const [values, setValues] = useState<FormValues>(defaultValues);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
@@ -157,16 +160,55 @@ export function ConnectionForm({ initial, onSaved }: Props) {
     }
   }
 
+  async function persistValues(): Promise<SavedConnection> {
+    const config = toConfig();
+    if (initial) {
+      return await updateConnection({
+        id: initial.id,
+        name: values.name.trim() || initial.name,
+        host: config.host,
+        port: config.port,
+        user: config.user,
+        password: values.password ? values.password : null,
+        database: config.database,
+        ssl: config.ssl,
+        ssh: config.ssh,
+        enable_cleartext_plugin: config.enable_cleartext_plugin,
+      });
+    }
+    return await saveConnection({ ...config, name: values.name.trim() });
+  }
+
   async function handleSave() {
-    if (!values.name.trim()) {
+    if (!initial && !values.name.trim()) {
       setStatus({ kind: "error", message: "Name is required." });
       return;
     }
     setStatus({ kind: "pending", action: "save" });
     try {
-      const saved = await saveConnection({ ...toConfig(), name: values.name.trim() });
-      setStatus({ kind: "ok", message: `Saved "${saved.name}"` });
+      const saved = await persistValues();
+      setStatus({
+        kind: "ok",
+        message: initial ? `Updated "${saved.name}"` : `Saved "${saved.name}"`,
+      });
       onSaved(saved);
+    } catch (err) {
+      setStatus({ kind: "error", message: String(err) });
+    }
+  }
+
+  async function handleConnect() {
+    if (!initial && !values.name.trim()) {
+      setStatus({ kind: "error", message: "Name is required to connect." });
+      return;
+    }
+    setStatus({ kind: "pending", action: "connect" });
+    try {
+      const saved = await persistValues();
+      onSaved(saved);
+      const result = await openConnection(saved.id);
+      setStatus({ kind: "ok", message: `Connected — MySQL ${result.version}` });
+      onOpened(result.id, result.version);
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     }
@@ -174,6 +216,8 @@ export function ConnectionForm({ initial, onSaved }: Props) {
 
   const testing = status.kind === "pending" && status.action === "test";
   const saving = status.kind === "pending" && status.action === "save";
+  const connecting = status.kind === "pending" && status.action === "connect";
+  const busy = testing || saving || connecting;
   const showCaCert =
     values.sslMode === "verify_ca" ||
     values.sslMode === "verify_identity" ||
@@ -402,29 +446,19 @@ export function ConnectionForm({ initial, onSaved }: Props) {
       {/* Actions */}
       <footer className="mt-6 flex flex-col gap-3">
         <div className="flex items-center justify-end gap-2">
-          <button
-            type="button"
-            onClick={handleSave}
-            disabled={testing || saving}
-            className="tp-btn"
-          >
+          <button type="button" onClick={handleSave} disabled={busy} className="tp-btn">
             {saving ? "Saving…" : "Save"}
           </button>
-          <button
-            type="button"
-            onClick={handleTest}
-            disabled={testing || saving}
-            className="tp-btn"
-          >
+          <button type="button" onClick={handleTest} disabled={busy} className="tp-btn">
             {testing ? "Testing…" : "Test"}
           </button>
           <button
             type="button"
-            onClick={handleTest}
-            disabled={testing || saving}
+            onClick={handleConnect}
+            disabled={busy}
             className="tp-btn tp-btn-primary"
           >
-            Connect
+            {connecting ? "Connecting…" : "Connect"}
           </button>
         </div>
         {status.kind === "ok" && (

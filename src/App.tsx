@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
+import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { SavedConnections } from "@/components/SavedConnections";
 import { activeConnections, type SavedConnection } from "@/lib/tauri";
 
@@ -44,9 +45,10 @@ function App() {
     });
   }
 
+  const selectedIsActive = selected != null && activeIds.has(selected.id);
+
   return (
     <main className="flex h-screen overflow-hidden">
-      {/* Left pane — connection list */}
       <aside className="flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
         <header className="flex items-center justify-between border-b border-sidebar-border px-4 py-3">
           <button
@@ -71,9 +73,14 @@ function App() {
         />
       </aside>
 
-      {/* Right pane — connection detail / form */}
-      <section className="flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
-        <ConnectionForm initial={selected} onSaved={handleSaved} />
+      <section className="flex flex-1 flex-col overflow-hidden">
+        {selectedIsActive && selected ? (
+          <DatabaseBrowser connection={selected} />
+        ) : (
+          <div className="flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
+            <ConnectionForm initial={selected} onSaved={handleSaved} onOpened={handleOpened} />
+          </div>
+        )}
       </section>
 
       {toast && (

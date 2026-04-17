@@ -352,3 +352,56 @@ pub fn delete(conn: &Connection, id: Uuid) -> AppResult<bool> {
     )?;
     Ok(affected > 0)
 }
+
+pub fn update(conn: &Connection, id: Uuid, input: NewConnection<'_>) -> AppResult<SavedConnection> {
+    if input.name.trim().is_empty() {
+        return Err(AppError::InvalidData("connection name is empty".into()));
+    }
+
+    let now = Utc::now();
+    let now_str = now.to_rfc3339();
+
+    let affected = conn.execute(
+        "UPDATE saved_connections SET
+            name = ?, host = ?, port = ?, username = ?, database = ?, use_ssl = ?,
+            ssl_mode = ?, ssl_ca_cert_path = ?, ssl_client_cert_path = ?, ssl_client_key_path = ?,
+            ssh_enabled = ?, ssh_host = ?, ssh_port = ?, ssh_user = ?,
+            ssh_auth_kind = ?, ssh_key_path = ?,
+            enable_cleartext_plugin = ?,
+            updated_at = ?
+         WHERE id = ?",
+        params![
+            input.name,
+            input.host,
+            i64::from(input.port),
+            input.user,
+            input.database,
+            i64::from(matches!(
+                input.ssl.mode,
+                SslMode::Preferred
+                    | SslMode::Required
+                    | SslMode::VerifyCa
+                    | SslMode::VerifyIdentity
+            )),
+            input.ssl.mode.as_str(),
+            input.ssl.ca_cert_path,
+            input.ssl.client_cert_path,
+            input.ssl.client_key_path,
+            i64::from(input.ssh.is_some()),
+            input.ssh.as_ref().map(|s| &s.host),
+            input.ssh.as_ref().map(|s| i64::from(s.port)),
+            input.ssh.as_ref().map(|s| &s.user),
+            input.ssh.as_ref().map(|s| s.auth_kind.as_str()),
+            input.ssh.as_ref().and_then(|s| s.key_path.clone()),
+            i64::from(input.enable_cleartext_plugin),
+            now_str,
+            id.to_string(),
+        ],
+    )?;
+    if affected == 0 {
+        return Err(AppError::NotFound(format!("connection {id} not found")));
+    }
+
+    get(conn, id)?
+        .ok_or_else(|| AppError::NotFound(format!("connection {id} not found after update")))
+}

@@ -70,6 +70,24 @@ export function saveConnection(input: SaveConnectionInput): Promise<SavedConnect
   return invoke<SavedConnection>("save_connection", { input });
 }
 
+export type UpdateConnectionInput = {
+  id: string;
+  name: string;
+  host: string;
+  port: number;
+  user: string;
+  /** 空文字なら keychain の既存パスワードを保持する */
+  password: string | null;
+  database: string | null;
+  ssl: SslConfigInput;
+  ssh: SshConfigInput | null;
+  enable_cleartext_plugin: boolean;
+};
+
+export function updateConnection(input: UpdateConnectionInput): Promise<SavedConnection> {
+  return invoke<SavedConnection>("update_connection", { input });
+}
+
 export function listConnections(): Promise<SavedConnection[]> {
   return invoke<SavedConnection[]>("list_connections");
 }
@@ -93,4 +111,32 @@ export function closeConnection(id: string): Promise<void> {
 
 export function activeConnections(): Promise<string[]> {
   return invoke<string[]>("active_connections");
+}
+
+export type TableKind = "table" | "view";
+export type TableInfo = { name: string; kind: TableKind };
+export type ColumnInfo = {
+  name: string;
+  data_type: string;
+  nullable: boolean;
+  key: string | null;
+  default: string | null;
+  extra: string | null;
+  comment: string | null;
+};
+
+export function listDatabases(connectionId: string): Promise<string[]> {
+  return invoke<string[]>("list_databases", { connectionId });
+}
+
+export function listTables(connectionId: string, database: string): Promise<TableInfo[]> {
+  return invoke<TableInfo[]>("list_tables", { connectionId, database });
+}
+
+export function describeTable(
+  connectionId: string,
+  database: string,
+  table: string,
+): Promise<ColumnInfo[]> {
+  return invoke<ColumnInfo[]>("describe_table", { connectionId, database, table });
 }
