@@ -46,3 +46,20 @@ export function listConnections(): Promise<SavedConnection[]> {
 export function deleteConnection(id: string): Promise<void> {
   return invoke<void>("delete_connection", { id });
 }
+
+export type OpenConnectionResult = {
+  id: string;
+  version: string;
+};
+
+export function openConnection(id: string): Promise<OpenConnectionResult> {
+  return invoke<OpenConnectionResult>("open_connection", { id });
+}
+
+export function closeConnection(id: string): Promise<void> {
+  return invoke<void>("close_connection", { id });
+}
+
+export function activeConnections(): Promise<string[]> {
+  return invoke<string[]>("active_connections");
+}

@@ -130,6 +130,20 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
     })
 }
 
+pub fn get(conn: &Connection, id: Uuid) -> AppResult<Option<SavedConnection>> {
+    let mut stmt = conn.prepare(
+        "SELECT id, name, host, port, username, database, use_ssl, created_at, updated_at
+         FROM saved_connections
+         WHERE id = ?",
+    )?;
+    let mut rows = stmt.query(params![id.to_string()])?;
+    if let Some(row) = rows.next()? {
+        Ok(Some(row_to_saved(row)?))
+    } else {
+        Ok(None)
+    }
+}
+
 pub fn list(conn: &Connection) -> AppResult<Vec<SavedConnection>> {
     let mut stmt = conn.prepare(
         "SELECT id, name, host, port, username, database, use_ssl, created_at, updated_at

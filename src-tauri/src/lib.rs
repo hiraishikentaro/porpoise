@@ -30,9 +30,7 @@ pub fn run() {
             let db_path = data_dir.join("connections.db");
             tracing::info!(path = %db_path.display(), "opening local db");
             let conn = storage::local_db::open(&db_path)?;
-            app.manage(state::AppState {
-                local_db: std::sync::Mutex::new(conn),
-            });
+            app.manage(state::AppState::new(conn));
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
@@ -40,6 +38,9 @@ pub fn run() {
             commands::connection::save_connection,
             commands::connection::list_connections,
             commands::connection::delete_connection,
+            commands::connection::open_connection,
+            commands::connection::close_connection,
+            commands::connection::active_connections,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

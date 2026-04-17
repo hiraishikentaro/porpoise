@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use serde::{Deserialize, Serialize};
 use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
+use sqlx::MySqlPool;
 
 use crate::error::AppResult;
 
@@ -48,8 +49,22 @@ pub async fn test_connection(config: &ConnectionConfig) -> AppResult<String> {
         .connect_with(connect_options(config))
         .await?;
 
-    let (version,): (String,) = sqlx::query_as("SELECT VERSION()").fetch_one(&pool).await?;
-
+    let version = fetch_version(&pool).await?;
     pool.close().await;
+    Ok(version)
+}
+
+/// AppState に保持する長命プールを作成する。
+pub async fn connect_pool(config: &ConnectionConfig) -> AppResult<MySqlPool> {
+    let pool = MySqlPoolOptions::new()
+        .max_connections(5)
+        .acquire_timeout(Duration::from_secs(10))
+        .connect_with(connect_options(config))
+        .await?;
+    Ok(pool)
+}
+
+pub async fn fetch_version(pool: &MySqlPool) -> AppResult<String> {
+    let (version,): (String,) = sqlx::query_as("SELECT VERSION()").fetch_one(pool).await?;
     Ok(version)
 }

@@ -14,6 +14,10 @@ pub fn save_password(id: Uuid, password: &str) -> AppResult<()> {
     Ok(())
 }
 
+pub fn get_password(id: Uuid) -> AppResult<String> {
+    Ok(entry(id)?.get_password()?)
+}
+
 /// keyring にエントリが無い場合 (NoEntry) も成功として扱う。
 /// SavedConnection の削除時にパスワードが既に無くても問題ないため。
 pub fn delete_password(id: Uuid) -> AppResult<()> {
