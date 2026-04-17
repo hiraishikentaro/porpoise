@@ -14,7 +14,7 @@ type Props = {
   activeIds: Set<string>;
   onSelect: (conn: SavedConnection) => void;
   onDeleted: (id: string) => void;
-  onOpened: (id: string, version: string) => void;
+  onOpened: (conn: SavedConnection, version: string) => void;
   onClosed: (id: string) => void;
 };
 
@@ -81,7 +81,7 @@ export function SavedConnections({
     try {
       const result = await openConnection(conn.id);
       onSelect(conn);
-      onOpened(result.id, result.version);
+      onOpened(conn, result.version);
     } catch (err) {
       setError(String(err));
     } finally {

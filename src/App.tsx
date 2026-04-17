@@ -1,24 +1,105 @@
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { SavedConnections } from "@/components/SavedConnections";
-import { activeConnections, type SavedConnection } from "@/lib/tauri";
+import { type Tab, TabBar } from "@/components/TabBar";
+import { TableDetail } from "@/components/TableDetail";
+import {
+  activeConnections,
+  closeConnection,
+  listConnections,
+  type SavedConnection,
+} from "@/lib/tauri";
+
+const connectionTabId = (connId: string) => `conn:${connId}`;
+const tableTabId = (connId: string, database: string, table: string) =>
+  `table:${connId}:${database}:${table}`;
 
 function App() {
   const [selected, setSelected] = useState<SavedConnection | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
+  const [tabs, setTabs] = useState<Tab[]>([]);
+  const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
 
+  // 起動時に既に Rust 側で open 済みの接続をタブに復元
   useEffect(() => {
-    activeConnections()
-      .then((ids) => setActiveIds(new Set(ids)))
-      .catch(() => {});
+    (async () => {
+      try {
+        const [ids, list] = await Promise.all([activeConnections(), listConnections()]);
+        const idSet = new Set(ids);
+        setActiveIds(idSet);
+        const restored: Tab[] = list
+          .filter((c) => idSet.has(c.id))
+          .map((c) => ({ id: connectionTabId(c.id), kind: "connection", connection: c }));
+        if (restored.length > 0) {
+          setTabs(restored);
+          setActiveTabId(restored[0].id);
+        }
+      } catch {
+        // noop
+      }
+    })();
   }, []);
+
+  const upsertConnectionTab = useCallback((conn: SavedConnection) => {
+    setTabs((prev) => {
+      const id = connectionTabId(conn.id);
+      const existing = prev.findIndex((t) => t.id === id);
+      if (existing >= 0) {
+        const next = [...prev];
+        next[existing] = { id, kind: "connection", connection: conn };
+        return next;
+      }
+      return [...prev, { id, kind: "connection", connection: conn }];
+    });
+    setActiveTabId(connectionTabId(conn.id));
+  }, []);
+
+  const upsertTableTab = useCallback((conn: SavedConnection, database: string, table: string) => {
+    const id = tableTabId(conn.id, database, table);
+    setTabs((prev) => {
+      if (prev.some((t) => t.id === id)) return prev;
+      return [...prev, { id, kind: "table", connection: conn, database, table }];
+    });
+    setActiveTabId(id);
+  }, []);
+
+  const removeTab = useCallback(
+    (id: string) => {
+      setTabs((prev) => {
+        const next = prev.filter((t) => t.id !== id);
+        if (activeTabId === id) {
+          setActiveTabId(next[next.length - 1]?.id ?? null);
+        }
+        return next;
+      });
+    },
+    [activeTabId],
+  );
+
+  const removeConnectionTabs = useCallback(
+    (connId: string) => {
+      setTabs((prev) => {
+        const next = prev.filter((t) => t.connection.id !== connId);
+        if (activeTabId && !next.some((t) => t.id === activeTabId)) {
+          setActiveTabId(next[next.length - 1]?.id ?? null);
+        }
+        return next;
+      });
+    },
+    [activeTabId],
+  );
 
   function handleSaved(conn: SavedConnection) {
     setRefreshKey((v) => v + 1);
     setSelected(conn);
+    // 接続メタデータをタブにも反映
+    setTabs((prev) =>
+      prev.map((t) => (t.connection.id === conn.id ? { ...t, connection: conn } : t)),
+    );
   }
 
   function handleDeleted(id: string) {
@@ -28,11 +109,13 @@ function App() {
       next.delete(id);
       return next;
     });
+    removeConnectionTabs(id);
     if (selected?.id === id) setSelected(null);
   }
 
-  function handleOpened(id: string, version: string) {
-    setActiveIds((prev) => new Set(prev).add(id));
+  function handleOpened(conn: SavedConnection, version: string) {
+    setActiveIds((prev) => new Set(prev).add(conn.id));
+    upsertConnectionTab(conn);
     setToast(`Connected — MySQL ${version}`);
     window.setTimeout(() => setToast(null), 2400);
   }
@@ -43,44 +126,134 @@ function App() {
       next.delete(id);
       return next;
     });
+    removeConnectionTabs(id);
   }
 
-  const selectedIsActive = selected != null && activeIds.has(selected.id);
+  async function handleCloseTab(id: string) {
+    const tab = tabs.find((t) => t.id === id);
+    if (!tab) return;
+
+    if (tab.kind === "connection") {
+      // 接続タブを閉じる = 接続プールを落とし、派生の table タブも畳む
+      try {
+        await closeConnection(tab.connection.id);
+      } catch {
+        // noop
+      }
+      handleClosed(tab.connection.id);
+    } else {
+      // table タブ単独を閉じる場合は接続は残す
+      removeTab(id);
+    }
+  }
+
+  function handleSelectTab(id: string) {
+    setActiveTabId(id);
+    const tab = tabs.find((t) => t.id === id);
+    if (tab) setSelected(tab.connection);
+  }
+
+  function handleNewTab() {
+    setActiveTabId(null);
+    setSelected(null);
+  }
+
+  function handleSelectConnection(conn: SavedConnection) {
+    setSelected(conn);
+    const id = connectionTabId(conn.id);
+    if (tabs.some((t) => t.id === id)) {
+      setActiveTabId(id);
+    } else {
+      setActiveTabId(null);
+    }
+  }
+
+  function handleOpenTableInTab(conn: SavedConnection, database: string, table: string) {
+    upsertTableTab(conn, database, table);
+  }
+
+  const activeTab = activeTabId ? (tabs.find((t) => t.id === activeTabId) ?? null) : null;
+  const browserConnectionActive =
+    activeTab?.kind === "connection" && activeIds.has(activeTab.connection.id);
+  const tableTabActive = activeTab?.kind === "table" && activeIds.has(activeTab.connection.id);
 
   return (
     <main className="flex h-screen overflow-hidden">
-      <aside className="flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-        <header className="flex items-center justify-between border-b border-sidebar-border px-4 py-3">
+      {!sidebarCollapsed && (
+        <aside className="flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+          <header className="flex items-center justify-between border-b border-sidebar-border px-4 py-3">
+            <button
+              type="button"
+              onClick={handleNewTab}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sidebar-border text-lg text-sidebar-foreground transition-colors hover:border-accent hover:text-accent"
+              aria-label="New connection"
+            >
+              +
+            </button>
+            <span className="text-sm font-semibold tracking-tight">Porpoise</span>
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(true)}
+              className="inline-flex h-8 w-8 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+              aria-label="Collapse sidebar"
+              title="Hide connections"
+            >
+              <SidebarCollapseIcon />
+            </button>
+          </header>
+          <SavedConnections
+            refreshKey={refreshKey}
+            selectedId={activeTab?.connection.id ?? selected?.id ?? null}
+            activeIds={activeIds}
+            onSelect={handleSelectConnection}
+            onDeleted={handleDeleted}
+            onOpened={handleOpened}
+            onClosed={handleClosed}
+          />
+        </aside>
+      )}
+
+      <section className="relative flex flex-1 flex-col overflow-hidden">
+        {sidebarCollapsed && (
           <button
             type="button"
-            onClick={() => setSelected(null)}
-            className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-sidebar-border text-lg text-sidebar-foreground transition-colors hover:border-accent hover:text-accent"
-            aria-label="New connection"
+            onClick={() => setSidebarCollapsed(false)}
+            className="absolute top-1 left-2 z-20 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:border-accent hover:text-accent"
+            aria-label="Show connections"
+            title="Show connections"
           >
-            +
+            <SidebarExpandIcon />
           </button>
-          <span className="text-sm font-semibold tracking-tight">Porpoise</span>
-          <span className="w-8" />
-        </header>
-        <SavedConnections
-          refreshKey={refreshKey}
-          selectedId={selected?.id ?? null}
-          activeIds={activeIds}
-          onSelect={setSelected}
-          onDeleted={handleDeleted}
-          onOpened={handleOpened}
-          onClosed={handleClosed}
-        />
-      </aside>
-
-      <section className="flex flex-1 flex-col overflow-hidden">
-        {selectedIsActive && selected ? (
-          <DatabaseBrowser connection={selected} />
-        ) : (
-          <div className="flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
-            <ConnectionForm initial={selected} onSaved={handleSaved} onOpened={handleOpened} />
-          </div>
         )}
+
+        <TabBar
+          tabs={tabs}
+          activeTabId={activeTabId}
+          onSelect={handleSelectTab}
+          onClose={handleCloseTab}
+          onNew={handleNewTab}
+        />
+
+        <div className="flex min-h-0 flex-1 flex-col">
+          {browserConnectionActive && activeTab?.kind === "connection" ? (
+            <DatabaseBrowser
+              key={activeTab.connection.id}
+              connection={activeTab.connection}
+              onOpenTable={handleOpenTableInTab}
+            />
+          ) : tableTabActive && activeTab?.kind === "table" ? (
+            <TableDetail
+              key={activeTab.id}
+              connectionId={activeTab.connection.id}
+              database={activeTab.database}
+              table={activeTab.table}
+            />
+          ) : (
+            <div className="flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
+              <ConnectionForm initial={selected} onSaved={handleSaved} onOpened={handleOpened} />
+            </div>
+          )}
+        </div>
       </section>
 
       {toast && (
@@ -95,6 +268,40 @@ function App() {
         </div>
       )}
     </main>
+  );
+}
+
+function SidebarCollapseIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" role="img" aria-label="collapse" fill="none">
+      <title>collapse sidebar</title>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6 3v10" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="m11 6-2 2 2 2"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
+
+function SidebarExpandIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-4 w-4" role="img" aria-label="expand" fill="none">
+      <title>expand sidebar</title>
+      <rect x="2" y="3" width="12" height="10" rx="1.5" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M6 3v10" stroke="currentColor" strokeWidth="1.3" />
+      <path
+        d="m9 6 2 2-2 2"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
 

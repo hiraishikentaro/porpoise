@@ -1,30 +1,22 @@
 import { useEffect, useMemo, useState } from "react";
-import { TableView } from "@/components/TableView";
-import {
-  type ColumnInfo,
-  describeTable,
-  listDatabases,
-  listTables,
-  type SavedConnection,
-  type TableInfo,
-} from "@/lib/tauri";
-
-type RightTab = "data" | "structure";
+import { TableDetail } from "@/components/TableDetail";
+import { listDatabases, listTables, type SavedConnection, type TableInfo } from "@/lib/tauri";
 
 type Props = {
   connection: SavedConnection;
+  /** ダブルクリックでテーブルを独立タブとして開くコールバック */
+  onOpenTable: (connection: SavedConnection, database: string, table: string) => void;
 };
 
-export function DatabaseBrowser({ connection }: Props) {
+export function DatabaseBrowser({ connection, onOpenTable }: Props) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
   const [selectedTable, setSelectedTable] = useState<string | null>(null);
-  const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [tableFilter, setTableFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState<"dbs" | "tables" | "columns" | null>(null);
-  const [rightTab, setRightTab] = useState<RightTab>("data");
+  const [loading, setLoading] = useState<"dbs" | "tables" | null>(null);
+  const [dbsCollapsed, setDbsCollapsed] = useState(false);
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: connection.id is the trigger
   useEffect(() => {
@@ -32,11 +24,9 @@ export function DatabaseBrowser({ connection }: Props) {
     setSelectedDb(null);
     setTables([]);
     setSelectedTable(null);
-    setColumns([]);
     setError(null);
   }, [connection.id]);
 
-  // Load databases for the selected connection
   useEffect(() => {
     let cancelled = false;
     setLoading("dbs");
@@ -45,7 +35,6 @@ export function DatabaseBrowser({ connection }: Props) {
       .then((list) => {
         if (cancelled) return;
         setDatabases(list);
-        // auto-select connection.database if present
         const initial =
           connection.database && list.includes(connection.database)
             ? connection.database
@@ -63,7 +52,6 @@ export function DatabaseBrowser({ connection }: Props) {
     };
   }, [connection.id, connection.database]);
 
-  // Load tables when db changes
   useEffect(() => {
     if (!selectedDb) {
       setTables([]);
@@ -89,30 +77,6 @@ export function DatabaseBrowser({ connection }: Props) {
     };
   }, [connection.id, selectedDb]);
 
-  // Load columns when table changes
-  useEffect(() => {
-    if (!selectedDb || !selectedTable) {
-      setColumns([]);
-      return;
-    }
-    let cancelled = false;
-    setLoading("columns");
-    setError(null);
-    describeTable(connection.id, selectedDb, selectedTable)
-      .then((cols) => {
-        if (!cancelled) setColumns(cols);
-      })
-      .catch((e) => {
-        if (!cancelled) setError(String(e));
-      })
-      .finally(() => {
-        if (!cancelled) setLoading(null);
-      });
-    return () => {
-      cancelled = true;
-    };
-  }, [connection.id, selectedDb, selectedTable]);
-
   const filteredTables = useMemo(() => {
     const q = tableFilter.trim().toLowerCase();
     if (!q) return tables;
@@ -122,13 +86,32 @@ export function DatabaseBrowser({ connection }: Props) {
   return (
     <div
       className="grid h-full w-full min-w-0 overflow-hidden"
-      style={{ gridTemplateColumns: "180px 200px minmax(0, 1fr)" }}
+      style={{
+        gridTemplateColumns: dbsCollapsed
+          ? "0px 200px minmax(0, 1fr)"
+          : "180px 200px minmax(0, 1fr)",
+      }}
     >
       {/* Databases */}
-      <aside className="flex min-h-0 flex-col border-r border-border">
+      <aside
+        className={`flex min-h-0 flex-col border-r border-border transition-[width] ${
+          dbsCollapsed ? "w-0 overflow-hidden border-r-0" : ""
+        }`}
+      >
         <header className="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
           <span>Databases</span>
-          <span className="font-normal text-muted-foreground/60">{databases.length}</span>
+          <div className="flex items-center gap-2">
+            <span className="font-normal text-muted-foreground/60">{databases.length}</span>
+            <button
+              type="button"
+              onClick={() => setDbsCollapsed(true)}
+              className="text-muted-foreground/70 hover:text-foreground"
+              aria-label="Collapse databases panel"
+              title="Collapse"
+            >
+              <ChevronLeft />
+            </button>
+          </div>
         </header>
         <ul className="flex-1 overflow-y-auto">
           {loading === "dbs" && (
@@ -160,7 +143,28 @@ export function DatabaseBrowser({ connection }: Props) {
       <aside className="flex min-h-0 flex-col border-r border-border">
         <header className="flex flex-col gap-2 px-3 py-2">
           <div className="flex items-center justify-between text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-            <span>Tables</span>
+            <div className="flex items-center gap-1.5">
+              {dbsCollapsed && (
+                <button
+                  type="button"
+                  onClick={() => setDbsCollapsed(false)}
+                  className="text-muted-foreground/70 hover:text-foreground"
+                  aria-label="Expand databases panel"
+                  title="Show databases"
+                >
+                  <ChevronRight />
+                </button>
+              )}
+              <span>Tables</span>
+              {dbsCollapsed && selectedDb && (
+                <span
+                  className="truncate text-[0.65rem] font-normal normal-case text-muted-foreground/60"
+                  title={selectedDb}
+                >
+                  · {selectedDb}
+                </span>
+              )}
+            </div>
             <span className="font-normal text-muted-foreground/60">{filteredTables.length}</span>
           </div>
           <input
@@ -176,23 +180,42 @@ export function DatabaseBrowser({ connection }: Props) {
           )}
           {filteredTables.map((t) => (
             <li key={t.name}>
-              <button
-                type="button"
-                onClick={() => setSelectedTable(t.name)}
-                className={`flex w-full items-center gap-2 px-3 py-1.5 text-left text-sm ${
+              <div
+                className={`group flex w-full items-center gap-2 px-3 py-1.5 text-sm ${
                   selectedTable === t.name
                     ? "bg-accent/15 text-accent"
                     : "text-foreground hover:bg-sidebar-accent/40"
                 }`}
               >
-                {t.kind === "view" ? <ViewIcon /> : <TableIcon />}
-                <span className="truncate">{t.name}</span>
-                {t.kind === "view" && (
-                  <span className="ml-auto text-[0.65rem] uppercase tracking-wide text-muted-foreground">
-                    view
-                  </span>
-                )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => setSelectedTable(t.name)}
+                  onDoubleClick={() => {
+                    if (selectedDb) onOpenTable(connection, selectedDb, t.name);
+                  }}
+                  className="flex min-w-0 flex-1 items-center gap-2 text-left"
+                  title="click: preview · double-click: open in new tab"
+                >
+                  {t.kind === "view" ? <ViewIcon /> : <TableIcon />}
+                  <span className="truncate">{t.name}</span>
+                  {t.kind === "view" && (
+                    <span className="text-[0.65rem] uppercase tracking-wide text-muted-foreground">
+                      view
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    if (selectedDb) onOpenTable(connection, selectedDb, t.name);
+                  }}
+                  className="text-muted-foreground/50 opacity-0 transition-opacity hover:text-accent group-hover:opacity-100"
+                  aria-label="Open in new tab"
+                  title="Open in new tab"
+                >
+                  <OpenInNewIcon />
+                </button>
+              </div>
             </li>
           ))}
           {tables.length === 0 && loading !== "tables" && selectedDb && (
@@ -201,141 +224,56 @@ export function DatabaseBrowser({ connection }: Props) {
         </ul>
       </aside>
 
-      {/* Main — Data / Structure tabs */}
-      <section className="flex min-h-0 flex-col overflow-hidden">
-        <header className="flex items-center justify-between border-b border-border px-4 py-2">
-          <div className="flex flex-col">
-            <span className="text-xs uppercase tracking-wide text-muted-foreground">
-              {selectedDb ?? "—"}
-            </span>
-            <h2 className="text-sm font-semibold">{selectedTable ?? "Select a table"}</h2>
-          </div>
-          <div className="inline-flex overflow-hidden rounded-md border border-border text-xs">
-            <TabButton active={rightTab === "data"} onClick={() => setRightTab("data")}>
-              Data
-            </TabButton>
-            <TabButton active={rightTab === "structure"} onClick={() => setRightTab("structure")}>
-              Structure
-            </TabButton>
-          </div>
-        </header>
-
-        {error && (
-          <p className="m-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
-            {error}
-          </p>
-        )}
-
-        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
-          {!selectedDb || !selectedTable ? (
-            <p className="px-4 py-3 text-xs text-muted-foreground">Select a table.</p>
-          ) : rightTab === "data" ? (
-            <TableView
-              key={`${connection.id}:${selectedDb}:${selectedTable}`}
-              connectionId={connection.id}
-              database={selectedDb}
-              table={selectedTable}
-            />
-          ) : (
-            <StructureTable loading={loading === "columns"} columns={columns} />
-          )}
+      {/* Main — inline table detail */}
+      {error && (
+        <p className="m-3 rounded-md border border-destructive/50 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+          {error}
+        </p>
+      )}
+      {!error && selectedDb && selectedTable ? (
+        <TableDetail
+          key={`${connection.id}:${selectedDb}:${selectedTable}`}
+          connectionId={connection.id}
+          database={selectedDb}
+          table={selectedTable}
+        />
+      ) : (
+        <div className="flex items-center justify-center p-10 text-xs text-muted-foreground">
+          {error ? null : "Select a table. Double-click to open in a new tab."}
         </div>
-      </section>
-    </div>
-  );
-}
-
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      className={`px-3 py-1.5 text-xs font-medium transition-colors ${
-        active
-          ? "bg-foreground text-background"
-          : "bg-transparent text-muted-foreground hover:text-foreground"
-      }`}
-    >
-      {children}
-    </button>
-  );
-}
-
-function StructureTable({ loading, columns }: { loading: boolean; columns: ColumnInfo[] }) {
-  return (
-    <div className="flex-1 overflow-auto">
-      {loading && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
-      {columns.length > 0 && (
-        <table className="w-full text-left text-sm">
-          <thead className="sticky top-0 bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur">
-            <tr className="border-b border-border">
-              <th className="px-4 py-2 font-semibold">Column</th>
-              <th className="px-3 py-2 font-semibold">Type</th>
-              <th className="px-3 py-2 font-semibold">Null</th>
-              <th className="px-3 py-2 font-semibold">Key</th>
-              <th className="px-3 py-2 font-semibold">Default</th>
-              <th className="px-3 py-2 font-semibold">Extra</th>
-            </tr>
-          </thead>
-          <tbody>
-            {columns.map((c) => (
-              <tr key={c.name} className="border-b border-border/60 hover:bg-sidebar-accent/30">
-                <td className="px-4 py-1.5 font-medium">{c.name}</td>
-                <td className="px-3 py-1.5 text-xs text-muted-foreground">{c.data_type}</td>
-                <td className="px-3 py-1.5 text-xs">
-                  {c.nullable ? (
-                    <span className="text-muted-foreground">YES</span>
-                  ) : (
-                    <span className="text-foreground">NO</span>
-                  )}
-                </td>
-                <td className="px-3 py-1.5 text-xs">{c.key && <KeyBadge value={c.key} />}</td>
-                <td className="px-3 py-1.5 text-xs text-muted-foreground">
-                  {c.default ?? <span className="text-muted-foreground/50">—</span>}
-                </td>
-                <td className="px-3 py-1.5 text-xs text-muted-foreground">
-                  {c.extra ?? <span className="text-muted-foreground/50">—</span>}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
       )}
     </div>
   );
 }
 
-function KeyBadge({ value }: { value: string }) {
-  const style = (() => {
-    switch (value) {
-      case "PRI":
-        return { label: "PK", bg: "bg-accent/15", text: "text-accent" };
-      case "UNI":
-        return { label: "UQ", bg: "bg-chart-3/15", text: "text-chart-3" };
-      case "MUL":
-        return { label: "IDX", bg: "bg-chart-2/15", text: "text-chart-2" };
-      default:
-        return { label: value, bg: "bg-muted", text: "text-muted-foreground" };
-    }
-  })();
+function ChevronLeft() {
   return (
-    <span
-      className={`rounded-sm px-1.5 py-0.5 text-[0.65rem] font-semibold tracking-wide ${style.bg} ${style.text}`}
-      style={style.label === "UQ" ? { color: "oklch(0.7 0.16 145)" } : undefined}
-    >
-      {style.label}
-    </span>
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" role="img" aria-label="collapse" fill="none">
+      <title>collapse</title>
+      <path
+        d="m10 4-4 4 4 4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
   );
 }
-
+function ChevronRight() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" role="img" aria-label="expand" fill="none">
+      <title>expand</title>
+      <path
+        d="m6 4 4 4-4 4"
+        stroke="currentColor"
+        strokeWidth="1.5"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
+    </svg>
+  );
+}
 function DatabaseIcon() {
   return (
     <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" role="img" aria-label="database" fill="none">
@@ -365,6 +303,26 @@ function ViewIcon() {
         strokeWidth="1.2"
       />
       <circle cx="8" cy="8" r="2" stroke="currentColor" strokeWidth="1.2" />
+    </svg>
+  );
+}
+function OpenInNewIcon() {
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="h-3 w-3"
+      role="img"
+      aria-label="open in new tab"
+      fill="none"
+    >
+      <title>open in new tab</title>
+      <path
+        d="M10 2h4v4M14 2 7 9M12 9v4H3V4h4"
+        stroke="currentColor"
+        strokeWidth="1.3"
+        strokeLinecap="round"
+        strokeLinejoin="round"
+      />
     </svg>
   );
 }

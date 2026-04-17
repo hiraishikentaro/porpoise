@@ -72,7 +72,7 @@ const defaultValues: FormValues = {
 type Props = {
   initial: SavedConnection | null;
   onSaved: (conn: SavedConnection) => void;
-  onOpened: (id: string, version: string) => void;
+  onOpened: (conn: SavedConnection, version: string) => void;
 };
 
 function optionalString(value: string): string | null {
@@ -208,7 +208,7 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
       onSaved(saved);
       const result = await openConnection(saved.id);
       setStatus({ kind: "ok", message: `Connected — MySQL ${result.version}` });
-      onOpened(result.id, result.version);
+      onOpened(saved, result.version);
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
     }
