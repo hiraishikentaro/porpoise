@@ -54,7 +54,11 @@ impl SshTunnel {
         target_port: u16,
     ) -> AppResult<Self> {
         let cfg = client::Config {
-            inactivity_timeout: Some(Duration::from_secs(30)),
+            // プール接続が idle の間に session が切れて channel open が失敗する
+            // 問題があるので 24 時間まで延長。keepalive は russh が裏で送ってくれる。
+            inactivity_timeout: Some(Duration::from_secs(60 * 60 * 24)),
+            keepalive_interval: Some(Duration::from_secs(15)),
+            keepalive_max: 6,
             ..client::Config::default()
         };
         let handle = client::connect(Arc::new(cfg), (ssh.host.as_str(), ssh.port), NoopHandler)

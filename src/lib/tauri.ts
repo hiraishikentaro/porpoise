@@ -140,3 +140,26 @@ export function describeTable(
 ): Promise<ColumnInfo[]> {
   return invoke<ColumnInfo[]>("describe_table", { connectionId, database, table });
 }
+
+export type TablePage = {
+  columns: string[];
+  rows: (string | null)[][];
+  offset: number;
+  returned: number;
+};
+
+export function selectTableRows(
+  connectionId: string,
+  database: string,
+  table: string,
+  offset: number,
+  limit: number,
+): Promise<TablePage> {
+  return invoke<TablePage>("select_table_rows", {
+    connectionId,
+    database,
+    table,
+    offset,
+    limit,
+  });
+}

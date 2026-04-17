@@ -1,5 +1,5 @@
 use mysql_async::prelude::Queryable;
-use mysql_async::{Pool, Row};
+use mysql_async::{Pool, Row, Value};
 use serde::Serialize;
 use tauri::State;
 use uuid::Uuid;
@@ -146,4 +146,107 @@ fn column_from_row(row: &Row) -> AppResult<ColumnInfo> {
 fn quote_ident(name: &str) -> String {
     let escaped = name.replace('`', "``");
     format!("`{}`", escaped)
+}
+
+#[derive(Debug, Serialize)]
+pub struct TablePage {
+    pub columns: Vec<String>,
+    /// 各セルは NULL なら None、それ以外は文字列表現。
+    pub rows: Vec<Vec<Option<String>>>,
+    pub offset: u64,
+    pub returned: u64,
+}
+
+#[tauri::command]
+pub async fn select_table_rows(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    database: String,
+    table: String,
+    offset: u64,
+    limit: u32,
+) -> AppResult<TablePage> {
+    let pool = pool_of(&state, connection_id)?;
+    let sql = format!(
+        "SELECT * FROM {}.{} LIMIT {} OFFSET {}",
+        quote_ident(&database),
+        quote_ident(&table),
+        limit,
+        offset,
+    );
+
+    let mut conn = pool.get_conn().await?;
+    let result = conn.query_iter(sql).await?;
+
+    let columns: Vec<String> = result
+        .columns()
+        .map(|cols| cols.iter().map(|c| c.name_str().to_string()).collect())
+        .unwrap_or_default();
+
+    let rows: Vec<Row> = result.collect_and_drop().await?;
+    conn.disconnect().await.ok();
+
+    let returned = rows.len() as u64;
+    let cells: Vec<Vec<Option<String>>> = rows
+        .into_iter()
+        .map(|row| row.unwrap().into_iter().map(value_to_display).collect())
+        .collect();
+
+    Ok(TablePage {
+        columns,
+        rows: cells,
+        offset,
+        returned,
+    })
+}
+
+/// mysql_async::Value → 表示用の文字列 (NULL は None)。
+fn value_to_display(v: Value) -> Option<String> {
+    match v {
+        Value::NULL => None,
+        Value::Bytes(b) => Some(match std::str::from_utf8(&b) {
+            Ok(s) => s.to_string(),
+            Err(_) => format!("0x{}", hex_encode(&b)),
+        }),
+        Value::Int(i) => Some(i.to_string()),
+        Value::UInt(u) => Some(u.to_string()),
+        Value::Float(f) => Some(f.to_string()),
+        Value::Double(d) => Some(d.to_string()),
+        Value::Date(y, mo, d, h, mi, s, us) => {
+            if h == 0 && mi == 0 && s == 0 && us == 0 {
+                Some(format!("{:04}-{:02}-{:02}", y, mo, d))
+            } else if us == 0 {
+                Some(format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}",
+                    y, mo, d, h, mi, s
+                ))
+            } else {
+                Some(format!(
+                    "{:04}-{:02}-{:02} {:02}:{:02}:{:02}.{:06}",
+                    y, mo, d, h, mi, s, us
+                ))
+            }
+        }
+        Value::Time(neg, d, h, mi, s, us) => {
+            let sign = if neg { "-" } else { "" };
+            let base = if d > 0 {
+                format!("{}{}d {:02}:{:02}:{:02}", sign, d, h, mi, s)
+            } else {
+                format!("{}{:02}:{:02}:{:02}", sign, h, mi, s)
+            };
+            Some(if us == 0 {
+                base
+            } else {
+                format!("{}.{:06}", base, us)
+            })
+        }
+    }
+}
+
+fn hex_encode(b: &[u8]) -> String {
+    let mut out = String::with_capacity(b.len() * 2);
+    for byte in b {
+        out.push_str(&format!("{:02x}", byte));
+    }
+    out
 }

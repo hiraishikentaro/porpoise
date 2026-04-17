@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { TableView } from "@/components/TableView";
 import {
   type ColumnInfo,
   describeTable,
@@ -7,6 +8,8 @@ import {
   type SavedConnection,
   type TableInfo,
 } from "@/lib/tauri";
+
+type RightTab = "data" | "structure";
 
 type Props = {
   connection: SavedConnection;
@@ -21,6 +24,7 @@ export function DatabaseBrowser({ connection }: Props) {
   const [tableFilter, setTableFilter] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState<"dbs" | "tables" | "columns" | null>(null);
+  const [rightTab, setRightTab] = useState<RightTab>("data");
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: connection.id is the trigger
   useEffect(() => {
@@ -116,7 +120,10 @@ export function DatabaseBrowser({ connection }: Props) {
   }, [tables, tableFilter]);
 
   return (
-    <div className="grid h-full w-full min-w-0 grid-cols-[220px_260px_1fr] overflow-hidden">
+    <div
+      className="grid h-full w-full min-w-0 overflow-hidden"
+      style={{ gridTemplateColumns: "180px 200px minmax(0, 1fr)" }}
+    >
       {/* Databases */}
       <aside className="flex min-h-0 flex-col border-r border-border">
         <header className="flex items-center justify-between px-3 py-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
@@ -194,18 +201,23 @@ export function DatabaseBrowser({ connection }: Props) {
         </ul>
       </aside>
 
-      {/* Columns */}
+      {/* Main — Data / Structure tabs */}
       <section className="flex min-h-0 flex-col overflow-hidden">
-        <header className="flex items-baseline justify-between border-b border-border px-4 py-2">
+        <header className="flex items-center justify-between border-b border-border px-4 py-2">
           <div className="flex flex-col">
             <span className="text-xs uppercase tracking-wide text-muted-foreground">
               {selectedDb ?? "—"}
             </span>
             <h2 className="text-sm font-semibold">{selectedTable ?? "Select a table"}</h2>
           </div>
-          {columns.length > 0 && (
-            <span className="text-xs text-muted-foreground">{columns.length} columns</span>
-          )}
+          <div className="inline-flex overflow-hidden rounded-md border border-border text-xs">
+            <TabButton active={rightTab === "data"} onClick={() => setRightTab("data")}>
+              Data
+            </TabButton>
+            <TabButton active={rightTab === "structure"} onClick={() => setRightTab("structure")}>
+              Structure
+            </TabButton>
+          </div>
         </header>
 
         {error && (
@@ -214,48 +226,89 @@ export function DatabaseBrowser({ connection }: Props) {
           </p>
         )}
 
-        <div className="flex-1 overflow-auto">
-          {loading === "columns" && (
-            <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>
-          )}
-          {columns.length > 0 && (
-            <table className="w-full text-left text-sm">
-              <thead className="sticky top-0 bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur">
-                <tr className="border-b border-border">
-                  <th className="px-4 py-2 font-semibold">Column</th>
-                  <th className="px-3 py-2 font-semibold">Type</th>
-                  <th className="px-3 py-2 font-semibold">Null</th>
-                  <th className="px-3 py-2 font-semibold">Key</th>
-                  <th className="px-3 py-2 font-semibold">Default</th>
-                  <th className="px-3 py-2 font-semibold">Extra</th>
-                </tr>
-              </thead>
-              <tbody>
-                {columns.map((c) => (
-                  <tr key={c.name} className="border-b border-border/60 hover:bg-sidebar-accent/30">
-                    <td className="px-4 py-1.5 font-medium">{c.name}</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">{c.data_type}</td>
-                    <td className="px-3 py-1.5 text-xs">
-                      {c.nullable ? (
-                        <span className="text-muted-foreground">YES</span>
-                      ) : (
-                        <span className="text-foreground">NO</span>
-                      )}
-                    </td>
-                    <td className="px-3 py-1.5 text-xs">{c.key && <KeyBadge value={c.key} />}</td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">
-                      {c.default ?? <span className="text-muted-foreground/50">—</span>}
-                    </td>
-                    <td className="px-3 py-1.5 text-xs text-muted-foreground">
-                      {c.extra ?? <span className="text-muted-foreground/50">—</span>}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="flex min-h-0 min-w-0 flex-1 overflow-hidden">
+          {!selectedDb || !selectedTable ? (
+            <p className="px-4 py-3 text-xs text-muted-foreground">Select a table.</p>
+          ) : rightTab === "data" ? (
+            <TableView
+              key={`${connection.id}:${selectedDb}:${selectedTable}`}
+              connectionId={connection.id}
+              database={selectedDb}
+              table={selectedTable}
+            />
+          ) : (
+            <StructureTable loading={loading === "columns"} columns={columns} />
           )}
         </div>
       </section>
+    </div>
+  );
+}
+
+function TabButton({
+  active,
+  onClick,
+  children,
+}: {
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`px-3 py-1.5 text-xs font-medium transition-colors ${
+        active
+          ? "bg-foreground text-background"
+          : "bg-transparent text-muted-foreground hover:text-foreground"
+      }`}
+    >
+      {children}
+    </button>
+  );
+}
+
+function StructureTable({ loading, columns }: { loading: boolean; columns: ColumnInfo[] }) {
+  return (
+    <div className="flex-1 overflow-auto">
+      {loading && <p className="px-4 py-3 text-xs text-muted-foreground">Loading…</p>}
+      {columns.length > 0 && (
+        <table className="w-full text-left text-sm">
+          <thead className="sticky top-0 bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur">
+            <tr className="border-b border-border">
+              <th className="px-4 py-2 font-semibold">Column</th>
+              <th className="px-3 py-2 font-semibold">Type</th>
+              <th className="px-3 py-2 font-semibold">Null</th>
+              <th className="px-3 py-2 font-semibold">Key</th>
+              <th className="px-3 py-2 font-semibold">Default</th>
+              <th className="px-3 py-2 font-semibold">Extra</th>
+            </tr>
+          </thead>
+          <tbody>
+            {columns.map((c) => (
+              <tr key={c.name} className="border-b border-border/60 hover:bg-sidebar-accent/30">
+                <td className="px-4 py-1.5 font-medium">{c.name}</td>
+                <td className="px-3 py-1.5 text-xs text-muted-foreground">{c.data_type}</td>
+                <td className="px-3 py-1.5 text-xs">
+                  {c.nullable ? (
+                    <span className="text-muted-foreground">YES</span>
+                  ) : (
+                    <span className="text-foreground">NO</span>
+                  )}
+                </td>
+                <td className="px-3 py-1.5 text-xs">{c.key && <KeyBadge value={c.key} />}</td>
+                <td className="px-3 py-1.5 text-xs text-muted-foreground">
+                  {c.default ?? <span className="text-muted-foreground/50">—</span>}
+                </td>
+                <td className="px-3 py-1.5 text-xs text-muted-foreground">
+                  {c.extra ?? <span className="text-muted-foreground/50">—</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      )}
     </div>
   );
 }
