@@ -91,6 +91,7 @@ pub struct SavedConnection {
     pub database: Option<String>,
     pub ssl: SavedSslConfig,
     pub ssh: Option<SavedSshConfig>,
+    pub enable_cleartext_plugin: bool,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
 }
@@ -132,6 +133,7 @@ fn run_migrations(conn: &Connection) -> AppResult<()> {
         ("ssh_user", "TEXT"),
         ("ssh_auth_kind", "TEXT"),
         ("ssh_key_path", "TEXT"),
+        ("enable_cleartext_plugin", "INTEGER NOT NULL DEFAULT 0"),
     ];
     for (name, decl) in additions {
         if !existing_cols.iter().any(|c| c == name) {
@@ -166,6 +168,7 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
     let port: i64 = row.get("port")?;
     let ssl_mode: String = row.get("ssl_mode")?;
     let ssh_enabled: i64 = row.get("ssh_enabled")?;
+    let enable_cleartext: i64 = row.get("enable_cleartext_plugin")?;
     let ssh = if ssh_enabled != 0 {
         let ssh_host: Option<String> = row.get("ssh_host")?;
         let ssh_port: Option<i64> = row.get("ssh_port")?;
@@ -221,6 +224,7 @@ fn row_to_saved(row: &Row<'_>) -> rusqlite::Result<SavedConnection> {
             client_key_path: row.get("ssl_client_key_path")?,
         },
         ssh,
+        enable_cleartext_plugin: enable_cleartext != 0,
         created_at: parse_ts(&row.get::<_, String>("created_at")?)?,
         updated_at: parse_ts(&row.get::<_, String>("updated_at")?)?,
     })
@@ -242,6 +246,7 @@ pub struct NewConnection<'a> {
     pub database: Option<&'a str>,
     pub ssl: SavedSslConfig,
     pub ssh: Option<SavedSshConfig>,
+    pub enable_cleartext_plugin: bool,
 }
 
 pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedConnection> {
@@ -298,6 +303,7 @@ pub fn insert(conn: &Connection, input: NewConnection<'_>) -> AppResult<SavedCon
         database: input.database.map(str::to_owned),
         ssl: input.ssl,
         ssh: input.ssh,
+        enable_cleartext_plugin: input.enable_cleartext_plugin,
         created_at: now,
         updated_at: now,
     })
@@ -308,6 +314,7 @@ pub fn get(conn: &Connection, id: Uuid) -> AppResult<Option<SavedConnection>> {
         "SELECT id, name, host, port, username, database,
                 ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
                 ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
+                enable_cleartext_plugin,
                 created_at, updated_at
          FROM saved_connections
          WHERE id = ?",
@@ -325,6 +332,7 @@ pub fn list(conn: &Connection) -> AppResult<Vec<SavedConnection>> {
         "SELECT id, name, host, port, username, database,
                 ssl_mode, ssl_ca_cert_path, ssl_client_cert_path, ssl_client_key_path,
                 ssh_enabled, ssh_host, ssh_port, ssh_user, ssh_auth_kind, ssh_key_path,
+                enable_cleartext_plugin,
                 created_at, updated_at
          FROM saved_connections
          ORDER BY created_at ASC",

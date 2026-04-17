@@ -3,7 +3,7 @@ use serde::{Serialize, Serializer};
 #[derive(Debug, thiserror::Error)]
 pub enum AppError {
     #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
+    Database(#[from] mysql_async::Error),
 
     #[error("local db error: {0}")]
     LocalDb(#[from] rusqlite::Error),

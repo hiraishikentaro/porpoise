@@ -1,24 +1,21 @@
+use std::path::PathBuf;
 use std::time::Duration;
 
+use mysql_async::prelude::Queryable;
+use mysql_async::{ClientIdentity, OptsBuilder, Pool, PoolConstraints, PoolOpts, SslOpts};
 use serde::Deserialize;
-use sqlx::mysql::{MySqlConnectOptions, MySqlPoolOptions, MySqlSslMode};
-use sqlx::MySqlPool;
 
 use crate::db::ssh_tunnel::{SshRuntimeAuth, SshRuntimeConfig, SshTunnel};
-use crate::error::AppResult;
+use crate::error::{AppError, AppResult};
 use crate::storage::local_db::{SavedSshConfig, SavedSslConfig, SshAuthKind, SslMode};
 
 #[derive(Debug, Clone, Default, Deserialize)]
 pub struct SslConfigInput {
-    #[serde(default = "default_ssl_mode")]
+    #[serde(default)]
     pub mode: SslMode,
     pub ca_cert_path: Option<String>,
     pub client_cert_path: Option<String>,
     pub client_key_path: Option<String>,
-}
-
-fn default_ssl_mode() -> SslMode {
-    SslMode::Disabled
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -43,7 +40,6 @@ pub enum SshAuthInput {
 }
 
 /// フロントから渡される接続情報 (test_connection / 内部で materialize した open 用)。
-/// 保存時は password/ssh auth secret は keyring へ分離される。
 #[derive(Debug, Clone, Deserialize)]
 pub struct ConnectionConfig {
     pub host: String,
@@ -55,6 +51,8 @@ pub struct ConnectionConfig {
     pub ssl: SslConfigInput,
     #[serde(default)]
     pub ssh: Option<SshConfigInput>,
+    #[serde(default)]
+    pub enable_cleartext_plugin: bool,
 }
 
 impl SslConfigInput {
@@ -115,49 +113,56 @@ impl From<&SshConfigInput> for SshRuntimeConfig {
     }
 }
 
-fn map_ssl_mode(mode: SslMode) -> MySqlSslMode {
-    match mode {
-        SslMode::Disabled => MySqlSslMode::Disabled,
-        SslMode::Preferred => MySqlSslMode::Preferred,
-        SslMode::Required => MySqlSslMode::Required,
-        SslMode::VerifyCa => MySqlSslMode::VerifyCa,
-        SslMode::VerifyIdentity => MySqlSslMode::VerifyIdentity,
+/// SslMode → mysql_async SslOpts に変換。Disabled は None を返す。
+fn ssl_opts_for(mode: SslMode, ssl: &SslConfigInput) -> Option<SslOpts> {
+    if matches!(mode, SslMode::Disabled) {
+        return None;
     }
+    let mut opts = SslOpts::default();
+    if let Some(p) = ssl.ca_cert_path.as_ref().filter(|s| !s.is_empty()) {
+        opts = opts.with_root_certs(vec![PathBuf::from(p).into()]);
+    }
+    if let (Some(cert), Some(key)) = (
+        ssl.client_cert_path.as_ref().filter(|s| !s.is_empty()),
+        ssl.client_key_path.as_ref().filter(|s| !s.is_empty()),
+    ) {
+        opts = opts.with_client_identity(Some(ClientIdentity::new(
+            PathBuf::from(cert).into(),
+            PathBuf::from(key).into(),
+        )));
+    }
+    let (accept_invalid_certs, skip_domain) = match mode {
+        SslMode::Preferred | SslMode::Required => (true, true),
+        SslMode::VerifyCa => (false, true),
+        SslMode::VerifyIdentity => (false, false),
+        SslMode::Disabled => (false, false),
+    };
+    opts = opts
+        .with_danger_accept_invalid_certs(accept_invalid_certs)
+        .with_danger_skip_domain_validation(skip_domain);
+    Some(opts)
 }
 
-fn build_connect_options(config: &ConnectionConfig, host: &str, port: u16) -> MySqlConnectOptions {
-    let mut opts = MySqlConnectOptions::new()
-        .host(host)
-        .port(port)
-        .username(&config.user)
-        .password(&config.password)
-        .ssl_mode(map_ssl_mode(config.ssl.mode));
+fn build_opts(config: &ConnectionConfig, host: &str, port: u16) -> OptsBuilder {
+    let mut opts = OptsBuilder::default()
+        .ip_or_hostname(host.to_string())
+        .tcp_port(port)
+        .user(Some(config.user.clone()))
+        .pass(Some(config.password.clone()))
+        .enable_cleartext_plugin(config.enable_cleartext_plugin);
 
     if let Some(db) = &config.database {
         if !db.is_empty() {
-            opts = opts.database(db);
+            opts = opts.db_name(Some(db.clone()));
         }
     }
-    if let Some(p) = &config.ssl.ca_cert_path {
-        if !p.is_empty() {
-            opts = opts.ssl_ca(p);
-        }
-    }
-    if let Some(p) = &config.ssl.client_cert_path {
-        if !p.is_empty() {
-            opts = opts.ssl_client_cert(p);
-        }
-    }
-    if let Some(p) = &config.ssl.client_key_path {
-        if !p.is_empty() {
-            opts = opts.ssl_client_key(p);
-        }
-    }
+    opts = opts.ssl_opts(ssl_opts_for(config.ssl.mode, &config.ssl));
+
     opts
 }
 
 pub struct OpenedConnection {
-    pub pool: MySqlPool,
+    pub pool: Pool,
     pub tunnel: Option<SshTunnel>,
 }
 
@@ -171,48 +176,52 @@ async fn resolve_target(config: &ConnectionConfig) -> AppResult<(String, u16, Op
     }
 }
 
-async fn open_pool_with_limits(
+async fn verify_connection(pool: &Pool) -> AppResult<()> {
+    let conn = pool.get_conn().await?;
+    conn.disconnect().await.ok();
+    Ok(())
+}
+
+async fn open_pool_with(
     config: &ConnectionConfig,
-    max_connections: u32,
-    acquire_timeout: Duration,
+    max_connections: usize,
 ) -> AppResult<OpenedConnection> {
     let (host, port, tunnel) = resolve_target(config).await?;
-    let opts = build_connect_options(config, &host, port);
-    let pool = match MySqlPoolOptions::new()
-        .max_connections(max_connections)
-        .acquire_timeout(acquire_timeout)
-        .connect_with(opts)
-        .await
-    {
-        Ok(p) => p,
-        Err(e) => {
-            if let Some(t) = tunnel {
-                t.shutdown().await;
-            }
-            return Err(e.into());
+    let opts = build_opts(config, &host, port).pool_opts(
+        PoolOpts::default()
+            .with_constraints(PoolConstraints::new(0, max_connections).unwrap_or_default())
+            .with_inactive_connection_ttl(Duration::from_secs(60)),
+    );
+    let pool = Pool::new(opts);
+    if let Err(e) = verify_connection(&pool).await {
+        pool.disconnect().await.ok();
+        if let Some(t) = tunnel {
+            t.shutdown().await;
         }
-    };
+        return Err(e);
+    }
     Ok(OpenedConnection { pool, tunnel })
 }
 
-/// 接続確認のみ行う。プールは関数終了時に drop されるので永続化しない。
-/// 返り値は MySQL の `VERSION()` 文字列。
+/// 接続確認のみ。開いたプールは即閉じる。
 pub async fn test_connection(config: &ConnectionConfig) -> AppResult<String> {
-    let opened = open_pool_with_limits(config, 1, Duration::from_secs(10)).await?;
-    let result = fetch_version(&opened.pool).await;
-    opened.pool.close().await;
-    if let Some(tunnel) = opened.tunnel {
-        tunnel.shutdown().await;
+    let opened = open_pool_with(config, 1).await?;
+    let version = fetch_version(&opened.pool).await;
+    opened.pool.disconnect().await.ok();
+    if let Some(t) = opened.tunnel {
+        t.shutdown().await;
     }
-    result
+    version
 }
 
-/// AppState に保持する長命プールを作成する (SSH トンネル併用時は tunnel も返す)。
+/// 長命プール (AppState に保持)。
 pub async fn open(config: &ConnectionConfig) -> AppResult<OpenedConnection> {
-    open_pool_with_limits(config, 5, Duration::from_secs(15)).await
+    open_pool_with(config, 5).await
 }
 
-pub async fn fetch_version(pool: &MySqlPool) -> AppResult<String> {
-    let (version,): (String,) = sqlx::query_as("SELECT VERSION()").fetch_one(pool).await?;
-    Ok(version)
+pub async fn fetch_version(pool: &Pool) -> AppResult<String> {
+    let mut conn = pool.get_conn().await?;
+    let version: Option<String> = conn.query_first("SELECT VERSION()").await?;
+    conn.disconnect().await.ok();
+    version.ok_or_else(|| AppError::InvalidData("VERSION() returned no rows".into()))
 }

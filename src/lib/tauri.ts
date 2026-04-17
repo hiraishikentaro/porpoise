@@ -28,6 +28,7 @@ export type ConnectionConfig = {
   database: string | null;
   ssl: SslConfigInput;
   ssh: SshConfigInput | null;
+  enable_cleartext_plugin: boolean;
 };
 
 export type SaveConnectionInput = ConnectionConfig & { name: string };
@@ -56,6 +57,7 @@ export type SavedConnection = {
   database: string | null;
   ssl: SavedSslConfig;
   ssh: SavedSshConfig | null;
+  enable_cleartext_plugin: boolean;
   created_at: string;
   updated_at: string;
 };

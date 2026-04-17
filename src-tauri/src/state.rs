@@ -1,20 +1,21 @@
 use std::collections::HashMap;
 use std::sync::Mutex;
 
+use mysql_async::Pool;
 use rusqlite::Connection;
-use sqlx::MySqlPool;
 use uuid::Uuid;
 
 use crate::db::ssh_tunnel::SshTunnel;
 
 pub struct ActiveConnection {
-    pub pool: MySqlPool,
+    pub pool: Pool,
     pub tunnel: Option<SshTunnel>,
 }
 
 impl ActiveConnection {
     pub async fn shutdown(self) {
-        self.pool.close().await;
+        // Pool::disconnect は全接続を閉じて内部タスクを止める。失敗しても握りつぶす。
+        self.pool.disconnect().await.ok();
         if let Some(tunnel) = self.tunnel {
             tunnel.shutdown().await;
         }

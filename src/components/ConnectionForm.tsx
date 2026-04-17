@@ -28,6 +28,7 @@ type FormValues = {
   sslCaCertPath: string;
   sslClientCertPath: string;
   sslClientKeyPath: string;
+  enableCleartextPlugin: boolean;
   sshEnabled: boolean;
   sshHost: string;
   sshPort: number;
@@ -55,6 +56,7 @@ const defaultValues: FormValues = {
   sslCaCertPath: "",
   sslClientCertPath: "",
   sslClientKeyPath: "",
+  enableCleartextPlugin: false,
   sshEnabled: false,
   sshHost: "",
   sshPort: 22,
@@ -91,6 +93,7 @@ export function ConnectionForm({ initial, onSaved }: Props) {
         sslCaCertPath: initial.ssl.ca_cert_path ?? "",
         sslClientCertPath: initial.ssl.client_cert_path ?? "",
         sslClientKeyPath: initial.ssl.client_key_path ?? "",
+        enableCleartextPlugin: initial.enable_cleartext_plugin,
         sshEnabled: initial.ssh !== null,
         sshHost: initial.ssh?.host ?? "",
         sshPort: initial.ssh?.port ?? 22,
@@ -140,6 +143,7 @@ export function ConnectionForm({ initial, onSaved }: Props) {
             auth: buildSshAuth(),
           }
         : null,
+      enable_cleartext_plugin: values.enableCleartextPlugin,
     };
   }
 
@@ -276,6 +280,19 @@ export function ConnectionForm({ initial, onSaved }: Props) {
               onChange={(e) => update("sslCaCertPath", e.currentTarget.value)}
             />
           </div>
+        </Row>
+
+        <Row label="Auth plugin">
+          <label className="flex items-center gap-2 py-1 text-sm text-foreground">
+            <input
+              type="checkbox"
+              className="h-4 w-4 accent-accent"
+              checked={values.enableCleartextPlugin}
+              onChange={(e) => update("enableCleartextPlugin", e.currentTarget.checked)}
+            />
+            <span>Enable Cleartext plugin</span>
+            <span className="text-xs text-muted-foreground">(insecure — LDAP/PAM 用)</span>
+          </label>
         </Row>
 
         {!showCaCert && values.sslMode === "disabled" && null}

@@ -31,6 +31,8 @@ pub struct SaveConnectionInput {
     pub ssl: SslConfigInput,
     #[serde(default)]
     pub ssh: Option<SshConfigInput>,
+    #[serde(default)]
+    pub enable_cleartext_plugin: bool,
 }
 
 #[tauri::command]
@@ -54,6 +56,7 @@ pub async fn save_connection(
                     .filter(|s| !s.is_empty()),
                 ssl: input.ssl.to_saved(),
                 ssh: input.ssh.as_ref().map(SshConfigInput::saved_meta),
+                enable_cleartext_plugin: input.enable_cleartext_plugin,
             },
         )?
     };
@@ -202,6 +205,7 @@ fn materialize_config(saved: &local_db::SavedConnection) -> AppResult<Connection
         database: saved.database.clone(),
         ssl: SslConfigInput::from_saved(saved.ssl.clone()),
         ssh,
+        enable_cleartext_plugin: saved.enable_cleartext_plugin,
     })
 }
 
