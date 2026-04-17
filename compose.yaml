@@ -1,0 +1,25 @@
+services:
+  mysql:
+    image: mysql:8.4
+    container_name: porpoise-mysql
+    command:
+      - --character-set-server=utf8mb4
+      - --collation-server=utf8mb4_0900_ai_ci
+    environment:
+      MYSQL_ROOT_PASSWORD: root
+      MYSQL_DATABASE: porpoise_dev
+      MYSQL_USER: porpoise
+      MYSQL_PASSWORD: porpoise
+    ports:
+      - "3307:3306"
+    volumes:
+      - porpoise-mysql-data:/var/lib/mysql
+      - ./docker/mysql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uporpoise", "-pporpoise"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+
+volumes:
+  porpoise-mysql-data:
