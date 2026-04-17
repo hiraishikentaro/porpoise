@@ -6,9 +6,11 @@ type Props = {
   connection: SavedConnection;
   /** ダブルクリックでテーブルを独立タブとして開くコールバック */
   onOpenTable: (connection: SavedConnection, database: string, table: string) => void;
+  /** SQL クエリタブを新規で開く (現在選択中の DB をデフォルトに) */
+  onNewQuery: (connection: SavedConnection, database: string | null) => void;
 };
 
-export function DatabaseBrowser({ connection, onOpenTable }: Props) {
+export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -165,7 +167,17 @@ export function DatabaseBrowser({ connection, onOpenTable }: Props) {
                 </span>
               )}
             </div>
-            <span className="font-normal text-muted-foreground/60">{filteredTables.length}</span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                onClick={() => onNewQuery(connection, selectedDb)}
+                className="rounded-sm border border-accent/50 bg-accent/10 px-1.5 py-0.5 text-[0.6rem] font-semibold tracking-wide uppercase text-accent hover:bg-accent hover:text-accent-foreground"
+                title="Open new SQL editor"
+              >
+                + SQL
+              </button>
+              <span className="font-normal text-muted-foreground/60">{filteredTables.length}</span>
+            </div>
           </div>
           <input
             placeholder="Filter…"

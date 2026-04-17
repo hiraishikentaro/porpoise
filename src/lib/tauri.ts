@@ -230,3 +230,29 @@ export function commitChanges(
 ): Promise<CommitChangesResult> {
   return invoke<CommitChangesResult>("commit_changes", { connectionId, changes });
 }
+
+export type QueryResult =
+  | {
+      kind: "select";
+      columns: string[];
+      rows: (string | null)[][];
+      returned: number;
+      elapsed_ms: number;
+    }
+  | {
+      kind: "affected";
+      rows: number;
+      elapsed_ms: number;
+    };
+
+export function executeQuery(
+  connectionId: string,
+  sql: string,
+  database?: string | null,
+): Promise<QueryResult> {
+  return invoke<QueryResult>("execute_query", {
+    connectionId,
+    sql,
+    database: database ?? null,
+  });
+}

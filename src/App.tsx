@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { SavedConnections } from "@/components/SavedConnections";
+import { SqlEditor } from "@/components/SqlEditor";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
 import {
@@ -14,6 +15,8 @@ import {
 const connectionTabId = (connId: string) => `conn:${connId}`;
 const tableTabId = (connId: string, database: string, table: string) =>
   `table:${connId}:${database}:${table}`;
+const newEditorTabId = () =>
+  `editor:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
 function App() {
   const [selected, setSelected] = useState<SavedConnection | null>(null);
@@ -23,8 +26,8 @@ function App() {
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [editorSeq, setEditorSeq] = useState(1);
 
-  // 起動時に既に Rust 側で open 済みの接続をタブに復元
   useEffect(() => {
     (async () => {
       try {
@@ -67,6 +70,30 @@ function App() {
     setActiveTabId(id);
   }, []);
 
+  const openEditorTab = useCallback(
+    (conn: SavedConnection, database: string | null) => {
+      const id = newEditorTabId();
+      const title = `Query ${editorSeq}`;
+      setEditorSeq((v) => v + 1);
+      setTabs((prev) => [
+        ...prev,
+        { id, kind: "editor", connection: conn, title, sql: "", database },
+      ]);
+      setActiveTabId(id);
+    },
+    [editorSeq],
+  );
+
+  const updateEditorSql = useCallback((id: string, sql: string) => {
+    setTabs((prev) => prev.map((t) => (t.id === id && t.kind === "editor" ? { ...t, sql } : t)));
+  }, []);
+
+  const updateEditorDatabase = useCallback((id: string, database: string | null) => {
+    setTabs((prev) =>
+      prev.map((t) => (t.id === id && t.kind === "editor" ? { ...t, database } : t)),
+    );
+  }, []);
+
   const removeTab = useCallback(
     (id: string) => {
       setTabs((prev) => {
@@ -96,7 +123,6 @@ function App() {
   function handleSaved(conn: SavedConnection) {
     setRefreshKey((v) => v + 1);
     setSelected(conn);
-    // 接続メタデータをタブにも反映
     setTabs((prev) =>
       prev.map((t) => (t.connection.id === conn.id ? { ...t, connection: conn } : t)),
     );
@@ -134,7 +160,6 @@ function App() {
     if (!tab) return;
 
     if (tab.kind === "connection") {
-      // 接続タブを閉じる = 接続プールを落とし、派生の table タブも畳む
       try {
         await closeConnection(tab.connection.id);
       } catch {
@@ -142,7 +167,6 @@ function App() {
       }
       handleClosed(tab.connection.id);
     } else {
-      // table タブ単独を閉じる場合は接続は残す
       removeTab(id);
     }
   }
@@ -176,6 +200,7 @@ function App() {
   const browserConnectionActive =
     activeTab?.kind === "connection" && activeIds.has(activeTab.connection.id);
   const tableTabActive = activeTab?.kind === "table" && activeIds.has(activeTab.connection.id);
+  const editorTabActive = activeTab?.kind === "editor" && activeIds.has(activeTab.connection.id);
 
   return (
     <main className="flex h-screen overflow-hidden">
@@ -240,6 +265,7 @@ function App() {
               key={activeTab.connection.id}
               connection={activeTab.connection}
               onOpenTable={handleOpenTableInTab}
+              onNewQuery={openEditorTab}
             />
           ) : tableTabActive && activeTab?.kind === "table" ? (
             <TableDetail
@@ -247,6 +273,15 @@ function App() {
               connectionId={activeTab.connection.id}
               database={activeTab.database}
               table={activeTab.table}
+            />
+          ) : editorTabActive && activeTab?.kind === "editor" ? (
+            <SqlEditor
+              key={activeTab.id}
+              connectionId={activeTab.connection.id}
+              initialSql={activeTab.sql}
+              initialDatabase={activeTab.database}
+              onChange={(sql) => updateEditorSql(activeTab.id, sql)}
+              onDatabaseChange={(db) => updateEditorDatabase(activeTab.id, db)}
             />
           ) : (
             <div className="flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">

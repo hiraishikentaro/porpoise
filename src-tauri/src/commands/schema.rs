@@ -320,6 +320,82 @@ pub async fn select_table_rows(
     })
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum QueryResult {
+    /// SELECT / SHOW / EXPLAIN など、結果セットが返る SQL。
+    Select {
+        columns: Vec<String>,
+        rows: Vec<Vec<Option<String>>>,
+        returned: u64,
+        elapsed_ms: u64,
+    },
+    /// INSERT / UPDATE / DELETE など、結果セットが無い SQL。
+    Affected { rows: u64, elapsed_ms: u64 },
+}
+
+#[tauri::command]
+pub async fn execute_query(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    sql: String,
+    database: Option<String>,
+) -> AppResult<QueryResult> {
+    let pool = pool_of(&state, connection_id)?;
+    let mut conn = pool.get_conn().await?;
+
+    // 明示的な DB 指定があれば USE で切り替える。失敗したらそのままエラーを返す。
+    if let Some(db) = database.as_deref().map(str::trim).filter(|s| !s.is_empty()) {
+        let use_sql = format!("USE {}", quote_ident(db));
+        conn.query_drop(use_sql).await?;
+    }
+
+    let start = std::time::Instant::now();
+    let result = conn.query_iter(sql).await?;
+    let columns_opt = result.columns();
+    let columns: Vec<String> = columns_opt
+        .as_ref()
+        .map(|cols| cols.iter().map(|c| c.name_str().to_string()).collect())
+        .unwrap_or_default();
+    let has_columns = columns_opt.is_some() && !columns.is_empty();
+
+    let rows: Vec<Row> = result.collect_and_drop().await?;
+    let affected = conn.affected_rows();
+    let elapsed_ms = start.elapsed().as_millis() as u64;
+    conn.disconnect().await.ok();
+
+    if has_columns {
+        let returned = rows.len() as u64;
+        let cells: Vec<Vec<Option<String>>> = rows
+            .into_iter()
+            .map(|row| row.unwrap().into_iter().map(value_to_display).collect())
+            .collect();
+        tracing::info!(
+            %connection_id,
+            returned,
+            elapsed_ms,
+            "execute_query (select) ok"
+        );
+        Ok(QueryResult::Select {
+            columns,
+            rows: cells,
+            returned,
+            elapsed_ms,
+        })
+    } else {
+        tracing::info!(
+            %connection_id,
+            affected,
+            elapsed_ms,
+            "execute_query (dml) ok"
+        );
+        Ok(QueryResult::Affected {
+            rows: affected,
+            elapsed_ms,
+        })
+    }
+}
+
 /// mysql_async::Value → 表示用の文字列 (NULL は None)。
 fn value_to_display(v: Value) -> Option<String> {
     match v {

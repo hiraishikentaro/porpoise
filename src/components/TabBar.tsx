@@ -15,7 +15,16 @@ export type TableTab = {
   table: string;
 };
 
-export type Tab = ConnectionTab | TableTab;
+export type EditorTab = {
+  id: string;
+  kind: "editor";
+  connection: SavedConnection;
+  title: string;
+  sql: string;
+  database: string | null;
+};
+
+export type Tab = ConnectionTab | TableTab | EditorTab;
 
 type Props = {
   tabs: Tab[];
@@ -47,13 +56,23 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew }: Props) {
               >
                 <ConnectionBadge connection={tab.connection} />
                 {tab.kind === "table" && <TableBadge />}
+                {tab.kind === "editor" && <QueryBadge />}
                 <span className="flex min-w-0 flex-1 flex-col items-start overflow-hidden leading-tight">
                   <span className="w-full truncate text-sm">
-                    {tab.kind === "connection" ? tab.connection.name : tab.table}
+                    {tab.kind === "connection"
+                      ? tab.connection.name
+                      : tab.kind === "table"
+                        ? tab.table
+                        : tab.title}
                   </span>
                   {tab.kind === "table" && (
                     <span className="w-full truncate text-[0.65rem] text-muted-foreground/60">
                       {tab.connection.name} · {tab.database}
+                    </span>
+                  )}
+                  {tab.kind === "editor" && (
+                    <span className="w-full truncate text-[0.65rem] text-muted-foreground/60">
+                      {tab.connection.name}
                     </span>
                   )}
                 </span>
@@ -111,6 +130,14 @@ function TableBadge() {
         <rect x="2" y="3" width="12" height="10" rx="1" stroke="currentColor" strokeWidth="1.3" />
         <path d="M2 7h12M6 3v10" stroke="currentColor" strokeWidth="1.3" />
       </svg>
+    </span>
+  );
+}
+
+function QueryBadge() {
+  return (
+    <span className="inline-flex h-5 w-5 shrink-0 items-center justify-center rounded-sm border border-accent/50 bg-accent/10 text-[0.55rem] font-bold text-accent">
+      SQL
     </span>
   );
 }
