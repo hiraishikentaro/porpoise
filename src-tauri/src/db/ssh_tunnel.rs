@@ -61,9 +61,19 @@ impl SshTunnel {
             keepalive_max: 6,
             ..client::Config::default()
         };
-        let handle = client::connect(Arc::new(cfg), (ssh.host.as_str(), ssh.port), NoopHandler)
-            .await
-            .map_err(map_ssh_err)?;
+        // SSH 先が応答しない場合の TCP ハンドシェイクは OS デフォルトで
+        // 60 秒以上待たされるので、明示的に短めに切る。
+        let connect_fut =
+            client::connect(Arc::new(cfg), (ssh.host.as_str(), ssh.port), NoopHandler);
+        let handle = match tokio::time::timeout(Duration::from_secs(10), connect_fut).await {
+            Ok(result) => result.map_err(map_ssh_err)?,
+            Err(_) => {
+                return Err(AppError::Ssh(format!(
+                    "ssh connect timed out after 10s ({}:{})",
+                    ssh.host, ssh.port
+                )));
+            }
+        };
         let mut handle = handle;
 
         let authed = match &ssh.auth {

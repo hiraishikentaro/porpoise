@@ -1,9 +1,16 @@
 import { autocompletion } from "@codemirror/autocomplete";
-import { sql as sqlLang } from "@codemirror/lang-sql";
+import { MySQL, sql as sqlLang } from "@codemirror/lang-sql";
 import { EditorView, keymap } from "@codemirror/view";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import { executeQuery, listDatabases, type QueryResult } from "@/lib/tauri";
+import { format as formatSql } from "sql-formatter";
+import {
+  executeQuery,
+  listDatabases,
+  type QueryResult,
+  type SchemaSnapshot,
+  schemaSnapshot,
+} from "@/lib/tauri";
 
 type Props = {
   connectionId: string;
@@ -59,6 +66,7 @@ export function SqlEditor({
   const [sqlText, setSqlText] = useState(initialSql);
   const [database, setDatabase] = useState<string | null>(initialDatabase);
   const [databases, setDatabases] = useState<string[]>([]);
+  const [schema, setSchema] = useState<SchemaSnapshot | null>(null);
   const [runState, setRunState] = useState<RunState>({ kind: "idle" });
   const viewRef = useRef<EditorView | null>(null);
 
@@ -81,6 +89,25 @@ export function SqlEditor({
       cancelled = true;
     };
   }, [connectionId]);
+
+  // DB が決まったらスキーマスナップショット (table → columns) を取得して補完に渡す
+  useEffect(() => {
+    if (!database) {
+      setSchema(null);
+      return;
+    }
+    let cancelled = false;
+    schemaSnapshot(connectionId, database)
+      .then((snap) => {
+        if (!cancelled) setSchema(snap);
+      })
+      .catch(() => {
+        if (!cancelled) setSchema(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [connectionId, database]);
 
   const run = useCallback(
     async (sql: string) => {
@@ -109,9 +136,39 @@ export function SqlEditor({
     run(sqlTextRef.current);
   }, [run]);
 
-  const extensions = useMemo(
-    () => [
-      sqlLang(),
+  const formatDocument = useCallback(() => {
+    const view = viewRef.current;
+    if (!view) return;
+    const current = view.state.doc.toString();
+    if (!current.trim()) return;
+    let formatted: string;
+    try {
+      formatted = formatSql(current, {
+        language: "mysql",
+        keywordCase: "upper",
+        tabWidth: 2,
+      });
+    } catch {
+      // パースに失敗したら整形だけスキップ (部分入力中など)
+      return;
+    }
+    view.dispatch({
+      changes: { from: 0, to: view.state.doc.length, insert: formatted },
+      selection: { anchor: Math.min(view.state.selection.main.head, formatted.length) },
+    });
+  }, []);
+
+  const extensions = useMemo(() => {
+    const schemaConfig = schema
+      ? Object.fromEntries(
+          Object.entries(schema.tables).map(([table, cols]) => [
+            table,
+            cols.map((name) => ({ label: name, type: "property" as const })),
+          ]),
+        )
+      : undefined;
+    return [
+      sqlLang({ dialect: MySQL, schema: schemaConfig, upperCaseKeywords: true }),
       autocompletion(),
       EditorView.lineWrapping,
       keymap.of([
@@ -129,10 +186,16 @@ export function SqlEditor({
             return true;
           },
         },
+        {
+          key: "Shift-Mod-f",
+          run: () => {
+            formatDocument();
+            return true;
+          },
+        },
       ]),
-    ],
-    [runAt, runAll],
-  );
+    ];
+  }, [runAt, runAll, schema, formatDocument]);
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
@@ -162,11 +225,20 @@ export function SqlEditor({
             </select>
           </label>
           <span className="text-muted-foreground">
-            <kbd className="rounded-sm border border-border px-1">⌘↵</kbd> run statement ·{" "}
-            <kbd className="rounded-sm border border-border px-1">⇧⌘↵</kbd> run all
+            <kbd className="rounded-sm border border-border px-1">⌘↵</kbd> run ·{" "}
+            <kbd className="rounded-sm border border-border px-1">⇧⌘↵</kbd> run all ·{" "}
+            <kbd className="rounded-sm border border-border px-1">⇧⌘F</kbd> format
           </span>
         </div>
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={formatDocument}
+            className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
+            title="Format SQL (⇧⌘F)"
+          >
+            Format
+          </button>
           <button
             type="button"
             onClick={runAt}

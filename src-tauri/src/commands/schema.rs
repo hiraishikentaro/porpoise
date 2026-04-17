@@ -334,6 +334,35 @@ pub enum QueryResult {
     Affected { rows: u64, elapsed_ms: u64 },
 }
 
+#[derive(Debug, Serialize)]
+pub struct SchemaSnapshot {
+    /// table name → ordinal-ordered column names
+    pub tables: std::collections::BTreeMap<String, Vec<String>>,
+}
+
+#[tauri::command]
+pub async fn schema_snapshot(
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    database: String,
+) -> AppResult<SchemaSnapshot> {
+    let pool = pool_of(&state, connection_id)?;
+    let mut conn = pool.get_conn().await?;
+    let sql = "SELECT TABLE_NAME, COLUMN_NAME
+               FROM information_schema.columns
+               WHERE TABLE_SCHEMA = ?
+               ORDER BY TABLE_NAME, ORDINAL_POSITION";
+    let rows: Vec<(String, String)> = conn.exec(sql, (database.clone(),)).await?;
+    conn.disconnect().await.ok();
+
+    let mut tables: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for (table, column) in rows {
+        tables.entry(table).or_default().push(column);
+    }
+    Ok(SchemaSnapshot { tables })
+}
+
 #[tauri::command]
 pub async fn execute_query(
     state: State<'_, AppState>,

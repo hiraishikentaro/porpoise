@@ -256,3 +256,12 @@ export function executeQuery(
     database: database ?? null,
   });
 }
+
+export type SchemaSnapshot = {
+  /** table name → column names (ordinal order) */
+  tables: Record<string, string[]>;
+};
+
+export function schemaSnapshot(connectionId: string, database: string): Promise<SchemaSnapshot> {
+  return invoke<SchemaSnapshot>("schema_snapshot", { connectionId, database });
+}
