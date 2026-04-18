@@ -265,7 +265,8 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     const ctx = canvas.getContext("2d");
     if (ctx) {
       // TableView のセル文字と同じフォント指定
-      ctx.font = '14px "Geist Variable", ui-sans-serif, system-ui, sans-serif';
+      ctx.font =
+        '14px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
     }
     return ctx;
   }, []);
