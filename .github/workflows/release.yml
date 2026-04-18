@@ -73,8 +73,7 @@ jobs:
           CERT: ${{ secrets.APPLE_CERTIFICATE }}
         run: |
           if [ -n "$CERT" ]; then
-            echo "Apple signing cert detected — enabling full sign + notarize"
-            {
+              {
               echo "APPLE_CERTIFICATE=${{ secrets.APPLE_CERTIFICATE }}"
               echo "APPLE_CERTIFICATE_PASSWORD=${{ secrets.APPLE_CERTIFICATE_PASSWORD }}"
               echo "APPLE_SIGNING_IDENTITY=${{ secrets.APPLE_SIGNING_IDENTITY }}"
@@ -92,8 +91,11 @@ jobs:
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
-          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.0-{0}', github.sha) }}
-          releaseName: "Porpoise ${{ github.ref_type == 'tag' && github.ref_name || github.sha }}"
-          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || 'true' }}
+          tagName: ${{ github.ref_type == 'tag' && github.ref_name || format('v0.0.0-{0}',
+            github.sha) }}
+          releaseName: "Porpoise ${{ github.ref_type == 'tag' && github.ref_name ||
+            github.sha }}"
+          releaseDraft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft ||
+            'true' }}
           prerelease: false
           args: --target ${{ matrix.target }}

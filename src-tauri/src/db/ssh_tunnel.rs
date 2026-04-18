@@ -114,7 +114,7 @@ impl SshTunnel {
                 let (mut local_stream, peer) = match listener.accept().await {
                     Ok(v) => v,
                     Err(e) => {
-                        tracing::warn!(error = %e, "ssh tunnel listener accept failed");
+                        tracing::warn!("ssh tunnel listener accept failed: {e}");
                         break;
                     }
                 };
@@ -132,7 +132,7 @@ impl SshTunnel {
                     {
                         Ok(c) => c,
                         Err(e) => {
-                            tracing::warn!(error = %e, "direct-tcpip channel open failed");
+                            tracing::warn!("direct-tcpip channel open failed: {e}");
                             let _ = local_stream.shutdown().await;
                             return;
                         }
@@ -141,7 +141,7 @@ impl SshTunnel {
                     if let Err(e) =
                         tokio::io::copy_bidirectional(&mut local_stream, &mut channel_stream).await
                     {
-                        tracing::debug!(error = %e, "ssh tunnel stream closed");
+                        tracing::debug!("ssh tunnel stream closed: {e}");
                     }
                 });
             }
