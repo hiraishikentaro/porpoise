@@ -346,12 +346,6 @@ export function SqlEditor({
               )}
             </select>
           </label>
-          <span className="text-muted-foreground">
-            <kbd className="rounded-sm border border-border px-1">⌘↵</kbd> run ·{" "}
-            <kbd className="rounded-sm border border-border px-1">⇧⌘↵</kbd> run all ·{" "}
-            <kbd className="rounded-sm border border-border px-1">⌥↵</kbd> explain ·{" "}
-            <kbd className="rounded-sm border border-border px-1">⇧⌘F</kbd> format
-          </span>
         </div>
         <div className="flex items-center gap-2">
           <button
@@ -389,6 +383,7 @@ export function SqlEditor({
             onClick={runAt}
             disabled={runState.kind === "running"}
             className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+            title="Run statement at cursor (⌘↵)"
           >
             Run
           </button>
@@ -397,6 +392,7 @@ export function SqlEditor({
             onClick={runAll}
             disabled={runState.kind === "running"}
             className="rounded-md border border-accent bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground disabled:opacity-50"
+            title="Run all statements (⇧⌘↵)"
           >
             Run all
           </button>
