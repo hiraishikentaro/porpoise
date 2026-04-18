@@ -15,6 +15,10 @@ concurrency:
   group: release-${{ github.ref }}
   cancel-in-progress: false
 
+# tauri-action が GitHub Release を作成/更新するので contents: write が必須
+permissions:
+  contents: write
+
 jobs:
   build:
     strategy:
