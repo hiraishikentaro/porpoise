@@ -30,6 +30,7 @@ const GROUPS: Group[] = [
       { keys: ["⌥", "↵"], desc: "EXPLAIN this statement" },
       { keys: ["⇧", "⌘", "F"], desc: "Format SQL" },
       { keys: ["⇧", "⌘", "D"], desc: "Split pane right" },
+      { keys: ["⌘", "F"], desc: "Filter results (when editor not focused)" },
     ],
   },
   {

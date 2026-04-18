@@ -1357,6 +1357,22 @@ function SingleResultView({
   database: string | null;
   lastSql: React.RefObject<string>;
 }) {
+  const [filter, setFilter] = useState("");
+  const filterRef = useRef<HTMLInputElement>(null);
+
+  // 新しい結果に切り替わったら filter はクリア
+  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on tab switch only
+  useEffect(() => {
+    setFilter("");
+  }, [tab]);
+
+  const filteredRows = useMemo(() => {
+    if (tab.kind !== "ok" || tab.result.kind !== "select") return null;
+    const q = filter.trim().toLowerCase();
+    if (!q) return tab.result.rows;
+    return tab.result.rows.filter((row) => row.some((cell) => cell?.toLowerCase().includes(q)));
+  }, [tab, filter]);
+
   if (tab.kind === "error") {
     return (
       <div className="min-h-0 flex-1 overflow-auto bg-destructive/10 p-4">
@@ -1379,14 +1395,66 @@ function SingleResultView({
       </div>
     );
   }
+  const rows = filteredRows ?? r.rows;
+  const isFiltered = filter.trim().length > 0;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      <header className="flex items-center justify-between px-4 py-1.5 text-xs">
+      <header className="flex items-center justify-between gap-3 px-4 py-1.5 text-xs">
         <span className="text-muted-foreground">
-          {r.returned} row{r.returned === 1 ? "" : "s"}
+          {isFiltered ? (
+            <>
+              <span className="tp-num text-foreground/90">{rows.length}</span>
+              <span className="text-muted-foreground"> / </span>
+              <span className="tp-num">{r.returned}</span>
+              <span className="ml-1">shown</span>
+            </>
+          ) : (
+            <>
+              {r.returned} row{r.returned === 1 ? "" : "s"}
+            </>
+          )}
           <span className="ml-2 text-muted-foreground/60">· {r.elapsed_ms} ms</span>
         </span>
-        <QueryExportMenu connectionId={connectionId} database={database} lastSql={lastSql} />
+        <div className="flex items-center gap-2">
+          <div className="group flex h-6 items-center gap-1.5 rounded-md border border-border bg-input/40 px-2 transition-colors focus-within:border-accent/70 focus-within:shadow-[0_0_0_2px_var(--accent-glow)]">
+            <svg
+              viewBox="0 0 16 16"
+              className="h-3 w-3 shrink-0 text-muted-foreground/60"
+              role="img"
+              aria-label="filter"
+              fill="none"
+            >
+              <title>filter</title>
+              <circle cx="7" cy="7" r="5" stroke="currentColor" strokeWidth="1.5" />
+              <path d="m11 11 3 3" stroke="currentColor" strokeWidth="1.5" strokeLinecap="round" />
+            </svg>
+            <input
+              ref={filterRef}
+              data-results-filter="true"
+              placeholder="Filter rows (⌘F)"
+              value={filter}
+              onChange={(e) => setFilter(e.currentTarget.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") {
+                  e.currentTarget.blur();
+                  setFilter("");
+                }
+              }}
+              className="h-full w-[180px] bg-transparent text-[0.72rem] outline-none placeholder:text-muted-foreground/60"
+            />
+            {filter && (
+              <button
+                type="button"
+                onClick={() => setFilter("")}
+                className="text-muted-foreground/50 hover:text-foreground"
+                aria-label="Clear filter"
+              >
+                ✕
+              </button>
+            )}
+          </div>
+          <QueryExportMenu connectionId={connectionId} database={database} lastSql={lastSql} />
+        </div>
       </header>
       <div className="flex-1 overflow-auto">
         <table className="min-w-full text-left text-sm">
@@ -1400,7 +1468,7 @@ function SingleResultView({
             </tr>
           </thead>
           <tbody>
-            {r.rows.map((row, i) => {
+            {rows.map((row, i) => {
               const rowKey = `row-${i}`;
               return (
                 <tr key={rowKey} className="border-b border-border/30 hover:bg-sidebar-accent/30">
@@ -1422,7 +1490,11 @@ function SingleResultView({
             })}
           </tbody>
         </table>
-        {r.rows.length === 0 && <p className="px-4 py-3 text-xs text-muted-foreground">No rows.</p>}
+        {rows.length === 0 && (
+          <p className="px-4 py-3 text-xs text-muted-foreground">
+            {isFiltered ? "No rows match filter." : "No rows."}
+          </p>
+        )}
       </div>
     </div>
   );

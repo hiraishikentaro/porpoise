@@ -500,6 +500,28 @@ function App() {
         addPaneRef.current(active.id);
         return;
       }
+
+      // ⌘F: エディタ (.cm-content) にフォーカスがあれば素通し。
+      // それ以外なら active tab の focused pane にある結果フィルタを focus。
+      if (key === "f" && !e.shiftKey) {
+        const activeEl = document.activeElement as HTMLElement | null;
+        if (activeEl?.closest(".cm-content")) return;
+        const id = activeTabIdRef.current;
+        const active = id ? tabsRef.current.find((t) => t.id === id) : null;
+        if (!active || active.kind !== "editor") return;
+        const paneId = focusedPaneIdRef.current ?? active.panes[0]?.id;
+        if (!paneId) return;
+        const input = document.querySelector<HTMLInputElement>(
+          `[data-pane-id="${paneId}"] [data-results-filter="true"]`,
+        );
+        if (input) {
+          e.preventDefault();
+          e.stopPropagation();
+          input.focus();
+          input.select();
+        }
+        return;
+      }
     }
     window.addEventListener("keydown", onKey, { capture: true });
     return () => window.removeEventListener("keydown", onKey, { capture: true });
