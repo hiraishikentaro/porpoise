@@ -7,6 +7,8 @@ type Props = {
   tabId: string;
   connection: SavedConnection;
   panes: EditorPane[];
+  focusedPaneId: string | null;
+  onFocusPane: (paneId: string) => void;
   onPaneSqlChange: (paneId: string, sql: string) => void;
   onPaneDatabaseChange: (paneId: string, database: string | null) => void;
   onAddPane: () => void;
@@ -24,6 +26,8 @@ export function EditorPanes({
   tabId,
   connection,
   panes,
+  focusedPaneId,
+  onFocusPane,
   onPaneSqlChange,
   onPaneDatabaseChange,
   onAddPane,
@@ -85,10 +89,17 @@ export function EditorPanes({
   return (
     <div ref={containerRef} className="flex min-h-0 min-w-0 flex-1">
       {panes.map((pane, i) => (
+        // biome-ignore lint/a11y/noStaticElementInteractions: focus tracking wrapper
         <div
           key={pane.id}
           data-pane-id={pane.id}
-          className="relative flex min-h-0 min-w-0 flex-col"
+          onPointerDown={() => onFocusPane(pane.id)}
+          onFocus={() => onFocusPane(pane.id)}
+          className={`relative flex min-h-0 min-w-0 flex-col transition-shadow ${
+            panes.length > 1 && focusedPaneId === pane.id
+              ? "shadow-[inset_0_2px_0_var(--accent)]"
+              : ""
+          }`}
           style={{ flexGrow: grows[pane.id] ?? 1, flexBasis: 0 }}
         >
           <SqlEditor

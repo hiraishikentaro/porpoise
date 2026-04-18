@@ -137,6 +137,9 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
+  const focusedPaneIdRef = useRef<string | null>(focusedPaneId);
+  focusedPaneIdRef.current = focusedPaneId;
   const { settings, update: updateSetting } = useSettings();
   const settingsRef = useRef(settings);
   settingsRef.current = settings;
@@ -391,6 +394,8 @@ function App() {
   openEditorTabRef.current = openEditorTab;
   const addPaneRef = useRef(addPane);
   addPaneRef.current = addPane;
+  const removePaneRef = useRef(removePane);
+  removePaneRef.current = removePane;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -402,6 +407,19 @@ function App() {
         if (!id) return;
         e.preventDefault();
         e.stopPropagation();
+        // editor タブで複数 pane があり、focus のある pane がそのタブ内なら
+        // pane だけ閉じる。単一 pane / focus なし / 他 tab kind ならタブを閉じる。
+        const active = tabsRef.current.find((t) => t.id === id);
+        const focused = focusedPaneIdRef.current;
+        if (
+          active?.kind === "editor" &&
+          active.panes.length > 1 &&
+          focused &&
+          active.panes.some((p) => p.id === focused)
+        ) {
+          removePaneRef.current(active.id, focused);
+          return;
+        }
         closeTabRef.current(id);
         return;
       }
@@ -638,6 +656,8 @@ function App() {
                   tabId={tab.id}
                   connection={tab.connection}
                   panes={tab.panes}
+                  focusedPaneId={focusedPaneId}
+                  onFocusPane={setFocusedPaneId}
                   onPaneSqlChange={(paneId, sql) => updatePaneSql(tab.id, paneId, sql)}
                   onPaneDatabaseChange={(paneId, db) => updatePaneDatabase(tab.id, paneId, db)}
                   onAddPane={() => addPane(tab.id)}
