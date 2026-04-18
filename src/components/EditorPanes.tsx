@@ -96,6 +96,8 @@ export function EditorPanes({
           onPointerDown={() => onFocusPane(pane.id)}
           onFocus={() => onFocusPane(pane.id)}
           className={`relative flex min-h-0 min-w-0 flex-col transition-shadow ${
+            i > 0 ? "border-l border-border" : ""
+          } ${
             panes.length > 1 && focusedPaneId === pane.id
               ? "shadow-[inset_0_2px_0_var(--accent)]"
               : ""
