@@ -1346,6 +1346,35 @@ function ResultsPane({
   );
 }
 
+const RES_COL_MIN = 60;
+const RES_COL_MAX = 600;
+const RES_COL_DEFAULT = 140;
+const RES_MEASURE_PAD = 28;
+const RES_MEASURE_SAMPLE = 60;
+const RES_CELL_MAX_CHARS = 100;
+
+function measureResultCols(
+  ctx: CanvasRenderingContext2D | null,
+  columns: string[],
+  rows: (string | null)[][],
+): number[] {
+  if (!ctx) return columns.map(() => RES_COL_DEFAULT);
+  return columns.map((col, ci) => {
+    let maxPx = ctx.measureText(col).width;
+    const cap = Math.min(rows.length, RES_MEASURE_SAMPLE);
+    for (let i = 0; i < cap; i++) {
+      const cell = rows[i]?.[ci];
+      const text = cell === null || cell === undefined ? "NULL" : cell.slice(0, RES_CELL_MAX_CHARS);
+      const w = ctx.measureText(text).width;
+      if (w > maxPx) maxPx = w;
+    }
+    return Math.max(RES_COL_MIN, Math.min(RES_COL_MAX, Math.round(maxPx + RES_MEASURE_PAD)));
+  });
+}
+
+type CopyFormat = "tsv" | "csv" | "json" | "sql";
+type SortState = { col: number; dir: "asc" | "desc" } | null;
+
 function SingleResultView({
   tab,
   connectionId,
@@ -1358,13 +1387,79 @@ function SingleResultView({
   lastSql: React.RefObject<string>;
 }) {
   const [filter, setFilter] = useState("");
+  const [colWidths, setColWidths] = useState<number[]>([]);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
+  const [anchor, setAnchor] = useState<number | null>(null);
+  const [sort, setSort] = useState<SortState>(null);
+  const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
+  const [toast, setToast] = useState<string | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
-  // 新しい結果に切り替わったら filter はクリア
-  // biome-ignore lint/correctness/useExhaustiveDependencies: reset on tab switch only
+  // 新しい結果に切り替わったら filter/selection/sort クリア + 列幅再計算
   useEffect(() => {
     setFilter("");
+    setSelected(new Set());
+    setAnchor(null);
+    setSort(null);
+    if (tab.kind !== "ok" || tab.result.kind !== "select") {
+      setColWidths([]);
+      return;
+    }
+    const canvas = document.createElement("canvas");
+    const ctx = canvas.getContext("2d");
+    if (ctx) {
+      ctx.font =
+        '14px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
+    }
+    setColWidths(measureResultCols(ctx, tab.result.columns, tab.result.rows));
   }, [tab]);
+
+  // ctxMenu は click anywhere / Esc で閉じる
+  useEffect(() => {
+    if (!ctxMenu) return;
+    const close = () => setCtxMenu(null);
+    const keyClose = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setCtxMenu(null);
+    };
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", keyClose);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", keyClose);
+    };
+  }, [ctxMenu]);
+
+  const startColResize = useCallback((e: React.PointerEvent, colIdx: number) => {
+    if (e.button !== 0) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const startX = e.clientX;
+    let startWidth = 0;
+    setColWidths((prev) => {
+      startWidth = prev[colIdx] ?? RES_COL_DEFAULT;
+      return prev;
+    });
+    document.body.style.cursor = "col-resize";
+    document.body.style.userSelect = "none";
+    function handleMove(ev: PointerEvent) {
+      const next = Math.max(RES_COL_MIN, Math.min(RES_COL_MAX, startWidth + (ev.clientX - startX)));
+      setColWidths((prev) => {
+        const out = prev.slice();
+        out[colIdx] = next;
+        return out;
+      });
+    }
+    function handleUp() {
+      window.removeEventListener("pointermove", handleMove);
+      window.removeEventListener("pointerup", handleUp);
+      window.removeEventListener("pointercancel", handleUp);
+      document.body.style.cursor = "";
+      document.body.style.userSelect = "";
+    }
+    window.addEventListener("pointermove", handleMove);
+    window.addEventListener("pointerup", handleUp);
+    window.addEventListener("pointercancel", handleUp);
+  }, []);
 
   const filteredRows = useMemo(() => {
     if (tab.kind !== "ok" || tab.result.kind !== "select") return null;
@@ -1372,6 +1467,89 @@ function SingleResultView({
     if (!q) return tab.result.rows;
     return tab.result.rows.filter((row) => row.some((cell) => cell?.toLowerCase().includes(q)));
   }, [tab, filter]);
+
+  const sortedRows = useMemo(() => {
+    if (!filteredRows || !sort) return filteredRows;
+    const idx = sort.col;
+    const dir = sort.dir === "asc" ? 1 : -1;
+    return filteredRows.slice().sort((a, b) => {
+      const av = a[idx];
+      const bv = b[idx];
+      if (av === null && bv === null) return 0;
+      if (av === null) return -1 * dir;
+      if (bv === null) return 1 * dir;
+      const an = Number(av);
+      const bn = Number(bv);
+      if (!Number.isNaN(an) && !Number.isNaN(bn) && av.trim() !== "" && bv.trim() !== "") {
+        return (an - bn) * dir;
+      }
+      return av.localeCompare(bv) * dir;
+    });
+  }, [filteredRows, sort]);
+
+  function cycleSort(colIdx: number) {
+    setSort((prev) => {
+      if (!prev || prev.col !== colIdx) return { col: colIdx, dir: "asc" };
+      if (prev.dir === "asc") return { col: colIdx, dir: "desc" };
+      return null;
+    });
+    setSelected(new Set());
+    setAnchor(null);
+  }
+
+  function handleRowClick(e: React.MouseEvent, i: number) {
+    if (e.shiftKey && anchor !== null) {
+      const [lo, hi] = anchor < i ? [anchor, i] : [i, anchor];
+      const next = new Set<number>();
+      for (let k = lo; k <= hi; k++) next.add(k);
+      setSelected(next);
+      return;
+    }
+    if (e.metaKey || e.ctrlKey) {
+      setSelected((prev) => {
+        const n = new Set(prev);
+        if (n.has(i)) n.delete(i);
+        else n.add(i);
+        return n;
+      });
+      setAnchor(i);
+      return;
+    }
+    setSelected(new Set([i]));
+    setAnchor(i);
+  }
+
+  function handleRowContextMenu(e: React.MouseEvent, i: number) {
+    e.preventDefault();
+    if (!selected.has(i)) {
+      setSelected(new Set([i]));
+      setAnchor(i);
+    }
+    setCtxMenu({ x: e.clientX, y: e.clientY });
+  }
+
+  async function copySelectedAs(format: CopyFormat) {
+    if (tab.kind !== "ok" || tab.result.kind !== "select") return;
+    const visible = sortedRows ?? tab.result.rows;
+    const pickRows = Array.from(selected)
+      .sort((a, b) => a - b)
+      .map((i) => visible[i])
+      .filter((r): r is (string | null)[] => Array.isArray(r));
+    if (pickRows.length === 0) return;
+    const cols = tab.result.columns;
+    const text = formatRowsAs(pickRows, cols, format, extractFromTable(tab.sql));
+    try {
+      await navigator.clipboard.writeText(text);
+      setToast(
+        `Copied ${pickRows.length} row${pickRows.length === 1 ? "" : "s"} as ${format.toUpperCase()}`,
+      );
+      window.setTimeout(() => setToast(null), 2500);
+    } catch {
+      setToast("Copy failed");
+      window.setTimeout(() => setToast(null), 2500);
+    }
+    setCtxMenu(null);
+  }
 
   if (tab.kind === "error") {
     return (
@@ -1395,7 +1573,7 @@ function SingleResultView({
       </div>
     );
   }
-  const rows = filteredRows ?? r.rows;
+  const rows = sortedRows ?? r.rows;
   const isFiltered = filter.trim().length > 0;
   return (
     <div className="flex min-h-0 flex-1 flex-col">
@@ -1457,25 +1635,65 @@ function SingleResultView({
         </div>
       </header>
       <div className="flex-1 overflow-auto">
-        <table className="min-w-full text-left text-sm">
+        <table className="text-left text-sm" style={{ tableLayout: "fixed" }}>
+          <colgroup>
+            {r.columns.map((c, ci) => (
+              <col key={`col-${c}`} style={{ width: colWidths[ci] ?? RES_COL_DEFAULT }} />
+            ))}
+          </colgroup>
           <thead className="sticky top-0 bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur">
             <tr className="border-b border-border">
-              {r.columns.map((c) => (
-                <th key={c} className="whitespace-nowrap border-r border-border/60 px-3 py-2">
-                  {c}
-                </th>
-              ))}
+              {r.columns.map((c, ci) => {
+                const sorted = sort?.col === ci ? sort.dir : null;
+                return (
+                  <th
+                    key={c}
+                    className="relative overflow-hidden whitespace-nowrap border-r border-border/60 p-0"
+                  >
+                    <button
+                      type="button"
+                      onClick={() => cycleSort(ci)}
+                      className={`flex w-full items-center gap-1 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
+                        sorted ? "text-accent" : ""
+                      }`}
+                      title="Click to sort"
+                    >
+                      <span className="truncate">{c}</span>
+                      {sorted && (
+                        <span aria-hidden className="ml-auto text-[0.65rem]">
+                          {sorted === "desc" ? "▼" : "▲"}
+                        </span>
+                      )}
+                    </button>
+                    <button
+                      type="button"
+                      aria-label={`Resize ${c}`}
+                      onPointerDown={(e) => startColResize(e, ci)}
+                      className="absolute top-0 right-0 z-10 h-full w-1.5 translate-x-1/2 cursor-col-resize bg-transparent transition-colors hover:bg-accent/40 active:bg-accent/60"
+                      title="Drag to resize"
+                    />
+                  </th>
+                );
+              })}
             </tr>
           </thead>
           <tbody>
             {rows.map((row, i) => {
               const rowKey = `row-${i}`;
+              const isSelected = selected.has(i);
               return (
-                <tr key={rowKey} className="border-b border-border/30 hover:bg-sidebar-accent/30">
+                <tr
+                  key={rowKey}
+                  onClick={(e) => handleRowClick(e, i)}
+                  onContextMenu={(e) => handleRowContextMenu(e, i)}
+                  className={`border-b border-border/30 ${
+                    isSelected ? "bg-accent/20 hover:bg-accent/25" : "hover:bg-sidebar-accent/30"
+                  }`}
+                >
                   {row.map((cell, ci) => (
                     <td
                       key={`${rowKey}:${r.columns[ci] ?? ci}`}
-                      className="max-w-[360px] truncate border-r border-border/20 px-3 py-1.5"
+                      className="truncate border-r border-border/20 px-3 py-1.5"
                       title={cell ?? ""}
                     >
                       {cell === null ? (
@@ -1496,8 +1714,104 @@ function SingleResultView({
           </p>
         )}
       </div>
+
+      {ctxMenu && (
+        <div
+          className="fixed z-50 min-w-[180px] overflow-hidden rounded-md border border-border bg-popover shadow-[0_10px_30px_-10px_oklch(0_0_0/60%)]"
+          style={{ left: ctxMenu.x, top: ctxMenu.y }}
+          onClick={(e) => e.stopPropagation()}
+          onKeyDown={(e) => e.stopPropagation()}
+          role="menu"
+          aria-label="Copy row options"
+        >
+          <div className="border-b border-border/70 px-3 py-1.5 font-mono text-[0.6rem] uppercase tracking-wider text-muted-foreground/70">
+            {selected.size} row{selected.size === 1 ? "" : "s"} selected
+          </div>
+          {(
+            [
+              ["tsv", "Copy as TSV (paste to spreadsheet)"],
+              ["csv", "Copy as CSV"],
+              ["json", "Copy as JSON"],
+              ["sql", "Copy as SQL INSERT"],
+            ] as const
+          ).map(([fmt, label]) => (
+            <button
+              key={fmt}
+              type="button"
+              onClick={() => copySelectedAs(fmt)}
+              className="block w-full px-3 py-1.5 text-left text-[0.75rem] text-foreground hover:bg-sidebar-accent/60"
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+
+      {toast && (
+        <div className="pointer-events-none absolute right-4 bottom-4 rounded-md border border-accent/40 bg-card/95 px-3 py-1.5 text-[0.72rem] shadow-lg backdrop-blur">
+          {toast}
+        </div>
+      )}
     </div>
   );
+}
+
+function extractFromTable(sql: string): string {
+  const m = sql.match(/\bFROM\s+`?([\w$]+)`?(?:\s*\.\s*`?([\w$]+)`?)?/i);
+  if (!m) return "exported_rows";
+  return m[2] ?? m[1] ?? "exported_rows";
+}
+
+function quoteIdent(name: string): string {
+  return `\`${name.replace(/`/g, "``")}\``;
+}
+
+function csvEscape(s: string): string {
+  if (!/[,"\n\r]/.test(s)) return s;
+  return `"${s.replace(/"/g, '""')}"`;
+}
+
+function sqlValue(v: string | null): string {
+  if (v === null) return "NULL";
+  const asNum = Number(v);
+  if (!Number.isNaN(asNum) && v.trim() !== "" && /^-?\d+(\.\d+)?$/.test(v)) return v;
+  return `'${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+}
+
+function formatRowsAs(
+  rows: (string | null)[][],
+  cols: string[],
+  format: CopyFormat,
+  tableName: string,
+): string {
+  if (format === "tsv") {
+    const header = cols.join("\t");
+    const body = rows.map((r) => r.map((c) => c ?? "").join("\t")).join("\n");
+    return `${header}\n${body}`;
+  }
+  if (format === "csv") {
+    const header = cols.map(csvEscape).join(",");
+    const body = rows.map((r) => r.map((c) => csvEscape(c ?? "")).join(",")).join("\n");
+    return `${header}\n${body}`;
+  }
+  if (format === "json") {
+    const objs = rows.map((r) => {
+      const o: Record<string, string | null> = {};
+      cols.forEach((c, i) => {
+        o[c] = r[i] ?? null;
+      });
+      return o;
+    });
+    return JSON.stringify(objs, null, 2);
+  }
+  // sql
+  const colList = cols.map(quoteIdent).join(", ");
+  return rows
+    .map((r) => {
+      const vals = r.map(sqlValue).join(", ");
+      return `INSERT INTO ${quoteIdent(tableName)} (${colList}) VALUES (${vals});`;
+    })
+    .join("\n");
 }
 
 function QueryExportMenu({
