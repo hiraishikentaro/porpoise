@@ -176,13 +176,10 @@
   * {
     @apply border-border outline-ring/50;
   }
-  html {
-    font-variation-settings: "opsz" 14;
-  }
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
-    font-feature-settings: "ss01", "cv11", "tnum";
+    font-feature-settings: "tnum" 1;
     -webkit-font-smoothing: antialiased;
     -moz-osx-font-smoothing: grayscale;
 
@@ -208,7 +205,7 @@
   input,
   button,
   table {
-    font-feature-settings: "tnum", "ss01";
+    font-feature-settings: "tnum" 1;
   }
 }
 
