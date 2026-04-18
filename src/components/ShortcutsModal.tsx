@@ -10,6 +10,8 @@ const GROUPS: Group[] = [
       { keys: ["⌘", ","], desc: "Open Settings" },
       { keys: ["⌘", "/"], desc: "Show this help" },
       { keys: ["⌘", "S"], desc: "Toggle connections sidebar" },
+      { keys: ["⌘", "+"], desc: "Increase font size" },
+      { keys: ["⌘", "-"], desc: "Decrease font size" },
     ],
   },
   {

@@ -8,6 +8,7 @@ import { SqlEditor } from "@/components/SqlEditor";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
 import { TablePalette } from "@/components/TablePalette";
+import { useSettings } from "@/lib/settings";
 import {
   activeConnections,
   closeConnection,
@@ -135,6 +136,11 @@ function App() {
   const [paletteOpen, setPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
+  const { settings, update: updateSetting } = useSettings();
+  const settingsRef = useRef(settings);
+  settingsRef.current = settings;
+  const updateSettingRef = useRef(updateSetting);
+  updateSettingRef.current = updateSetting;
 
   useEffect(() => {
     (async () => {
@@ -406,6 +412,22 @@ function App() {
         e.preventDefault();
         e.stopPropagation();
         setSettingsOpen((v) => !v);
+        return;
+      }
+
+      // ⌘+ / ⌘= で font scale を 1px 拡大、⌘- で 1px 縮小 (11〜18 で clamp)
+      if (key === "+" || key === "=") {
+        e.preventDefault();
+        e.stopPropagation();
+        const next = Math.min(18, settingsRef.current.fontScale + 1);
+        updateSettingRef.current("fontScale", next);
+        return;
+      }
+      if (key === "-") {
+        e.preventDefault();
+        e.stopPropagation();
+        const next = Math.max(11, settingsRef.current.fontScale - 1);
+        updateSettingRef.current("fontScale", next);
         return;
       }
     }
