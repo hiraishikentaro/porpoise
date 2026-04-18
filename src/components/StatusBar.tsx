@@ -1,4 +1,5 @@
 import type { Tab } from "@/components/TabBar";
+import { useT } from "@/lib/i18n";
 import { colorForName, ringColorFor } from "@/lib/status-color";
 import { useTabStatus } from "@/lib/tab-status";
 import type { SavedConnection } from "@/lib/tauri";
@@ -9,8 +10,6 @@ type Props = {
   activeConnectionsCount: number;
   totalTabs: number;
 };
-
-const numFmt = new Intl.NumberFormat("en-US");
 
 export function StatusBar({
   activeTab,
@@ -23,6 +22,7 @@ export function StatusBar({
   const database = databaseOf(activeTab);
   const tableInfo = tableInfoOf(activeTab);
   const tabStatus = useTabStatus(activeTab?.id ?? null);
+  const t = useT();
 
   return (
     <footer
@@ -33,7 +33,7 @@ export function StatusBar({
       {conn ? (
         <ConnectionBadge connection={conn} />
       ) : (
-        <span className="text-muted-foreground/60">no connection</span>
+        <span className="text-muted-foreground/60">{t("status.noConnection")}</span>
       )}
       <Dot />
       <span className="text-foreground/80">{conn ? conn.host : "—"}</span>
@@ -62,41 +62,29 @@ export function StatusBar({
       {tabStatus?.rows !== undefined && (
         <>
           <Dot />
-          <span className="text-foreground/85" title="Rows displayed">
-            {numFmt.format(tabStatus.rows)}
-            {tabStatus.fetched !== undefined && tabStatus.fetched !== tabStatus.rows && (
-              <span className="text-muted-foreground/60">
-                {" "}
-                / {numFmt.format(tabStatus.fetched)}
-              </span>
-            )}
-            <span className="text-muted-foreground/60"> rows</span>
-          </span>
+          <span className="text-foreground/85">{t("status.rows", tabStatus.rows)}</span>
         </>
       )}
       {tabStatus?.elapsedMs !== undefined && (
         <>
           <Dot />
-          <span className="text-foreground/85" title="Last query elapsed">
-            {numFmt.format(tabStatus.elapsedMs)}
-            <span className="text-muted-foreground/60"> ms</span>
+          <span className="text-foreground/85">
+            {tabStatus.elapsedMs.toLocaleString()}
+            <span className="text-muted-foreground/60"> {t("status.ms")}</span>
           </span>
         </>
       )}
       {tabStatus?.pending !== undefined && tabStatus.pending > 0 && (
         <>
           <Dot />
-          <span
-            className="rounded-sm border border-accent/40 bg-accent/10 px-1.5 py-[1px] text-accent"
-            title="Unsaved pending changes"
-          >
-            {tabStatus.pending} pending
+          <span className="rounded-sm border border-accent/40 bg-accent/10 px-1.5 py-[1px] text-accent">
+            {t("status.pending", tabStatus.pending)}
           </span>
         </>
       )}
       <span className="ml-auto flex items-center gap-3">
         <span>
-          {activeConnectionsCount} conn · {totalTabs} tab{totalTabs === 1 ? "" : "s"}
+          {t("status.connections", activeConnectionsCount)} · {t("status.tabs", totalTabs)}
         </span>
       </span>
     </footer>

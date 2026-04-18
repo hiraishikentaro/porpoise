@@ -77,13 +77,17 @@ type Props = {
   initial: SavedConnection | null;
   onSaved: (conn: SavedConnection) => void;
   onOpened: (conn: SavedConnection, version: string) => void;
+  /** 接続オープンが開始された時に呼ぶ (グローバル "接続中" モーダル表示用) */
+  onOpening?: (conn: SavedConnection) => void;
+  /** 接続オープンが完了 / 失敗した時に呼ぶ (成功/失敗とも呼ばれる) */
+  onOpenFinished?: () => void;
 };
 
 function optionalString(value: string): string | null {
   return value.trim() ? value.trim() : null;
 }
 
-export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
+export function ConnectionForm({ initial, onSaved, onOpened, onOpening, onOpenFinished }: Props) {
   const [values, setValues] = useState<FormValues>(defaultValues);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
 
@@ -217,14 +221,19 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
       return;
     }
     setStatus({ kind: "pending", action: "connect" });
+    let openingConn: SavedConnection | null = null;
     try {
       const saved = await persistValues();
       onSaved(saved);
+      openingConn = saved;
+      onOpening?.(saved);
       const result = await openConnection(saved.id);
       setStatus({ kind: "ok", message: `Connected — MySQL ${result.version}` });
       onOpened(saved, result.version);
     } catch (err) {
       setStatus({ kind: "error", message: String(err) });
+    } finally {
+      if (openingConn) onOpenFinished?.();
     }
   }
 
@@ -349,7 +358,7 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
               onChange={(e) => update("enableCleartextPlugin", e.currentTarget.checked)}
             />
             <span>Enable Cleartext plugin</span>
-            <span className="text-xs text-muted-foreground">(insecure — LDAP/PAM 用)</span>
+            <span className="text-xs text-muted-foreground">(insecure — for LDAP/PAM)</span>
           </label>
         </Row>
 
@@ -363,7 +372,7 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
             />
             <span>Record query history</span>
             <span className="text-xs text-muted-foreground">
-              (off にするとこの接続のクエリ履歴を保存しません)
+              (off disables history recording for this connection)
             </span>
           </label>
         </Row>

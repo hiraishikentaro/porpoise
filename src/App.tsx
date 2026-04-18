@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "@/components/CommandPalette";
+import { ConnectingOverlay } from "@/components/ConnectingOverlay";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { EditorPanes } from "@/components/EditorPanes";
@@ -9,6 +10,7 @@ import { ShortcutsModal } from "@/components/ShortcutsModal";
 import { StatusBar } from "@/components/StatusBar";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
+import { useT } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import {
   activeConnections,
@@ -131,6 +133,7 @@ function App() {
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
   const [connectionVersions, setConnectionVersions] = useState<Map<string, string>>(new Map());
+  const [connectingConnection, setConnectingConnection] = useState<SavedConnection | null>(null);
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
@@ -148,6 +151,7 @@ function App() {
   settingsRef.current = settings;
   const updateSettingRef = useRef(updateSetting);
   updateSettingRef.current = updateSetting;
+  const t = useT();
 
   // macOS WKWebView の autocorrect / autocapitalize / spellcheck を全 input で無効化。
   // password 以外の全 input に属性を付与し、動的に追加された input も MutationObserver で拾う。
@@ -699,6 +703,8 @@ function App() {
               onDeleted={handleDeleted}
               onOpened={handleOpened}
               onClosed={handleClosed}
+              onOpening={setConnectingConnection}
+              onOpenFinished={() => setConnectingConnection(null)}
             />
           </aside>
         )}
@@ -802,6 +808,8 @@ function App() {
                     initial={selected}
                     onSaved={handleSaved}
                     onOpened={handleOpened}
+                    onOpening={setConnectingConnection}
+                    onOpenFinished={() => setConnectingConnection(null)}
                   />
                 </div>
               </div>
@@ -818,7 +826,7 @@ function App() {
           actions={[
             {
               id: "new-sql",
-              label: "New SQL Editor Tab",
+              label: t("cmdk.action.newSql"),
               hint: "⌘T",
               run: () => {
                 if (activeTab) {
@@ -834,12 +842,12 @@ function App() {
             },
             {
               id: "new-connection",
-              label: "New Connection",
+              label: t("cmdk.action.newConnection"),
               run: handleNewTab,
             },
             {
               id: "close-tab",
-              label: "Close Active Tab",
+              label: t("cmdk.action.closeTab"),
               hint: "⌘W",
               run: () => {
                 if (activeTabId) handleCloseTab(activeTabId);
@@ -847,19 +855,19 @@ function App() {
             },
             {
               id: "open-settings",
-              label: "Open Settings",
+              label: t("cmdk.action.openSettings"),
               hint: "⌘,",
               run: () => setSettingsOpen(true),
             },
             {
               id: "open-shortcuts",
-              label: "Show Keyboard Shortcuts",
+              label: t("cmdk.action.showShortcuts"),
               hint: "⌘/",
               run: () => setShortcutsOpen(true),
             },
             {
               id: "toggle-theme",
-              label: "Toggle Theme (Dark / Light / System)",
+              label: t("cmdk.action.toggleTheme"),
               run: () => {
                 const cur = settingsRef.current.theme;
                 const next = cur === "dark" ? "light" : cur === "light" ? "system" : "dark";
@@ -868,7 +876,7 @@ function App() {
             },
             {
               id: "toggle-sidebar",
-              label: "Toggle Connections Sidebar",
+              label: t("cmdk.action.toggleSidebar"),
               hint: "⌘S",
               run: () => setSidebarCollapsed((v) => !v),
             },
@@ -899,6 +907,7 @@ function App() {
         activeConnectionsCount={activeIds.size}
         totalTabs={tabs.length}
       />
+      <ConnectingOverlay connection={connectingConnection} />
     </div>
   );
 }

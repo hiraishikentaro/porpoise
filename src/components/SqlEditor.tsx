@@ -8,6 +8,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useSettings } from "@/lib/settings";
 import { sqlLinter } from "@/lib/sql-lint";
@@ -1284,6 +1285,7 @@ function ResultsPane({
   lastSql: React.RefObject<string>;
 }) {
   const [activeTab, setActiveTab] = useState(0);
+  const t = useT();
 
   // done に遷移したら先頭タブをアクティブにする (前回インデックスが超過しないよう)
   useEffect(() => {
@@ -1306,8 +1308,8 @@ function ResultsPane({
               />
             </svg>
           }
-          title="Run a query"
-          description="Press ⌘↵ to run the statement at cursor, or ⇧⌘↵ to run every statement in the editor."
+          title={t("empty.runQuery.title")}
+          description={t("empty.runQuery.desc")}
         />
       </div>
     );
@@ -1322,7 +1324,8 @@ function ResultsPane({
             aria-hidden
             className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
           />
-          Running{suffix}…
+          {t("editor.running")}
+          {suffix}…
         </div>
         <div className="flex flex-col gap-1.5 pt-1">
           <Skeleton className="h-2.5" style={{ width: "70%" }} />

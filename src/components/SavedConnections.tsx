@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import { colorForName, initialsOf, isLocalHost, statusColorVars } from "@/lib/status-color";
 import {
   closeConnection,
@@ -18,6 +19,8 @@ type Props = {
   onDeleted: (id: string) => void;
   onOpened: (conn: SavedConnection, version: string) => void;
   onClosed: (id: string) => void;
+  onOpening?: (conn: SavedConnection) => void;
+  onOpenFinished?: () => void;
 };
 
 type PendingAction = { kind: "open" | "close"; id: string };
@@ -30,12 +33,15 @@ export function SavedConnections({
   onDeleted,
   onOpened,
   onClosed,
+  onOpening,
+  onOpenFinished,
 }: Props) {
   const [items, setItems] = useState<SavedConnection[]>([]);
   const [query, setQuery] = useState("");
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [pending, setPending] = useState<PendingAction | null>(null);
+  const t = useT();
 
   // biome-ignore lint/correctness/useExhaustiveDependencies: refreshKey is a trigger-only dep
   useEffect(() => {
@@ -85,6 +91,7 @@ export function SavedConnections({
   async function handleOpen(conn: SavedConnection) {
     setPending({ kind: "open", id: conn.id });
     setError(null);
+    onOpening?.(conn);
     try {
       const result = await openConnection(conn.id);
       onSelect(conn);
@@ -93,6 +100,7 @@ export function SavedConnections({
       setError(String(err));
     } finally {
       setPending(null);
+      onOpenFinished?.();
     }
   }
 
@@ -159,7 +167,9 @@ export function SavedConnections({
       )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
-        {loading && (
+        {/* 初回ロード (items 空 + loading) のときだけ skeleton。
+            refreshKey 更新などの再取得では既存 items を表示し続けてちらつかせない */}
+        {loading && items.length === 0 && (
           <ul className="flex flex-col gap-0.5 px-1 pt-1">
             {Array.from({ length: 4 }, (_, i) => (
               <li
@@ -205,8 +215,8 @@ export function SavedConnections({
                 />
               </svg>
             }
-            title="No connections yet"
-            description="Save your first MySQL connection to get started. Tap the + button above."
+            title={t("empty.noConnections.title")}
+            description={t("empty.noConnections.desc")}
           />
         )}
         {!loading && filtered.length === 0 && items.length > 0 && (
@@ -226,12 +236,20 @@ export function SavedConnections({
                 <button
                   type="button"
                   onClick={() => onSelect(conn)}
-                  className={`group relative flex w-full items-center gap-3 rounded-md px-2 py-2 text-left transition-colors ${
+                  className={`group relative flex w-full items-center gap-3 overflow-hidden rounded-md px-2 py-2 text-left transition-colors ${
                     selected
                       ? "bg-sidebar-accent/90 shadow-[inset_1px_0_0_var(--accent)]"
                       : "hover:bg-sidebar-accent/50"
                   }`}
                 >
+                  {isOpening && (
+                    <span
+                      aria-hidden
+                      className="pointer-events-none absolute inset-x-0 bottom-0 h-[2px] overflow-hidden bg-accent/10"
+                    >
+                      <span className="block h-full w-1/3 animate-[indeterminate_1.15s_ease-in-out_infinite] bg-accent" />
+                    </span>
+                  )}
                   <Avatar label={initialsOf(conn.name)} color={color} active={open} />
                   <div className="flex min-w-0 flex-1 flex-col">
                     <div className="flex items-center gap-1.5">
@@ -260,7 +278,11 @@ export function SavedConnections({
                       )}
                     </span>
                   </div>
-                  <div className="flex shrink-0 items-center gap-1 opacity-0 transition-opacity group-hover:opacity-100">
+                  <div
+                    className={`flex shrink-0 items-center gap-1 transition-opacity ${
+                      isOpening || isClosing ? "opacity-100" : "opacity-0 group-hover:opacity-100"
+                    }`}
+                  >
                     {open ? (
                       <button
                         type="button"
@@ -271,7 +293,7 @@ export function SavedConnections({
                         disabled={isClosing}
                         className="rounded-md border border-accent/50 bg-accent/10 px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-accent transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
                       >
-                        {isClosing ? "…" : "Close"}
+                        {isClosing ? t("conn.closing") : t("conn.close")}
                       </button>
                     ) : (
                       <button
@@ -281,9 +303,13 @@ export function SavedConnections({
                           handleOpen(conn);
                         }}
                         disabled={isOpening}
-                        className="rounded-md border border-border px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider text-foreground transition-colors hover:border-accent hover:text-accent disabled:opacity-50"
+                        className={`rounded-md px-2 py-0.5 text-[0.65rem] font-semibold uppercase tracking-wider transition-colors ${
+                          isOpening
+                            ? "border border-accent/60 bg-accent/15 text-accent"
+                            : "border border-border text-foreground hover:border-accent hover:text-accent"
+                        } disabled:opacity-80`}
                       >
-                        {isOpening ? "…" : "Open"}
+                        {isOpening ? t("conn.connecting") : t("conn.open")}
                       </button>
                     )}
                     <button

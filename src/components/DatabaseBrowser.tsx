@@ -2,6 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { CsvImportModal } from "@/components/CsvImportModal";
 import { TableDetail } from "@/components/TableDetail";
 import { EmptyState } from "@/components/ui/empty-state";
+import { useT } from "@/lib/i18n";
 import { listDatabases, listTables, type SavedConnection, type TableInfo } from "@/lib/tauri";
 
 const WIDTHS_KEY = "porpoise.browser-widths.v1";
@@ -43,6 +44,7 @@ type Props = {
 };
 
 export function DatabaseBrowser({ connection, onOpenTable, onNewQuery, tabId }: Props) {
+  const t = useT();
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -389,8 +391,8 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery, tabId }: 
                 <path d="M2 7h12M6 3v10" stroke="currentColor" strokeWidth="1.3" />
               </svg>
             }
-            title="Pick a table to browse"
-            description="Choose a database in the left column, then click a table. Double-click to open it in its own tab."
+            title={t("empty.browse.title")}
+            description={t("empty.browse.desc")}
           />
         )
       )}

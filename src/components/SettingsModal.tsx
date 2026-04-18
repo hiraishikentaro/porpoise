@@ -1,5 +1,6 @@
 import { useEffect } from "react";
-import { type ThemeMode, useSettings } from "@/lib/settings";
+import { useT } from "@/lib/i18n";
+import { type LocaleMode, type ThemeMode, useSettings } from "@/lib/settings";
 
 type Props = {
   onClose: () => void;
@@ -7,6 +8,7 @@ type Props = {
 
 export function SettingsModal({ onClose }: Props) {
   const { settings, update, reset, resolvedTheme } = useSettings();
+  const t = useT();
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -34,7 +36,9 @@ export function SettingsModal({ onClose }: Props) {
             <span className="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground/80">
               Preferences
             </span>
-            <h2 className="font-display text-[1.02rem] font-medium tracking-tight">Settings</h2>
+            <h2 className="font-display text-[1.02rem] font-medium tracking-tight">
+              {t("settings.title")}
+            </h2>
           </div>
           <button
             type="button"
@@ -47,22 +51,37 @@ export function SettingsModal({ onClose }: Props) {
         </header>
 
         <div className="flex flex-col gap-5 p-5">
+          <Field label={t("settings.language.label")}>
+            <SegmentedControl<LocaleMode>
+              value={settings.locale}
+              options={[
+                { value: "auto", label: t("settings.language.auto") },
+                { value: "en", label: t("settings.language.en") },
+                { value: "ja", label: t("settings.language.ja") },
+              ]}
+              onChange={(v) => update("locale", v)}
+            />
+          </Field>
+
           <Field
-            label="Theme"
-            hint={settings.theme === "system" ? `follows OS → ${resolvedTheme}` : undefined}
+            label={t("settings.theme.label")}
+            hint={settings.theme === "system" ? `→ ${resolvedTheme}` : undefined}
           >
             <SegmentedControl<ThemeMode>
               value={settings.theme}
               options={[
-                { value: "system", label: "System" },
-                { value: "dark", label: "Dark" },
-                { value: "light", label: "Light" },
+                { value: "system", label: t("settings.theme.system") },
+                { value: "dark", label: t("settings.theme.dark") },
+                { value: "light", label: t("settings.theme.light") },
               ]}
               onChange={(v) => update("theme", v)}
             />
           </Field>
 
-          <Field label="Font size" hint={`${settings.fontScale}px base — 全体がスケール`}>
+          <Field
+            label={t("settings.fontSize.label")}
+            hint={t("settings.fontSize.hint", settings.fontScale)}
+          >
             <div className="flex items-center gap-3">
               <input
                 type="range"
@@ -83,7 +102,7 @@ export function SettingsModal({ onClose }: Props) {
             </div>
           </Field>
 
-          <Field label="Editor tab width">
+          <Field label={t("settings.tabWidth.label")} hint={t("settings.tabWidth.hint")}>
             <SegmentedControl<2 | 4>
               value={settings.tabWidth}
               options={[
@@ -94,10 +113,7 @@ export function SettingsModal({ onClose }: Props) {
             />
           </Field>
 
-          <Field
-            label="Confirm destructive"
-            hint="スニペット削除・履歴クリアなどで window.confirm を出す"
-          >
+          <Field label={t("settings.confirm.label")} hint={t("settings.confirm.hint")}>
             <label className="flex items-center gap-2 text-sm">
               <input
                 type="checkbox"
@@ -105,7 +121,7 @@ export function SettingsModal({ onClose }: Props) {
                 checked={settings.confirmDestructive}
                 onChange={(e) => update("confirmDestructive", e.currentTarget.checked)}
               />
-              <span>Ask before destructive actions</span>
+              <span>{t("settings.confirm.label")}</span>
             </label>
           </Field>
         </div>
@@ -116,10 +132,10 @@ export function SettingsModal({ onClose }: Props) {
             onClick={reset}
             className="text-[0.7rem] uppercase tracking-wider text-muted-foreground transition-colors hover:text-destructive"
           >
-            Reset to defaults
+            {t("settings.reset")}
           </button>
           <button type="button" onClick={onClose} className="tp-btn tp-btn-primary">
-            Done
+            {t("settings.done")}
           </button>
         </footer>
       </div>

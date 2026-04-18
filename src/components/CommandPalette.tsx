@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { fuzzyMatch } from "@/lib/fuzzy";
+import { useT } from "@/lib/i18n";
 import { colorForName, ringColorFor } from "@/lib/status-color";
 import { type AllTablesEntry, listAllTables, type SavedConnection } from "@/lib/tauri";
 
@@ -54,6 +55,7 @@ export function CommandPalette({
   const [tablesByConn, setTablesByConn] = useState<Map<string, AllTablesEntry[]>>(new Map());
   const inputRef = useRef<HTMLInputElement>(null);
   const listRef = useRef<HTMLDivElement>(null);
+  const t = useT();
 
   useEffect(() => {
     if (open) inputRef.current?.focus();
@@ -194,7 +196,7 @@ export function CommandPalette({
             value={query}
             onChange={(e) => setQuery(e.currentTarget.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Type a command, connection, or table…"
+            placeholder={t("cmdk.placeholder")}
             autoComplete="off"
             autoCorrect="off"
             autoCapitalize="off"
@@ -202,12 +204,14 @@ export function CommandPalette({
             className="h-7 flex-1 bg-transparent text-[0.88rem] outline-none placeholder:text-muted-foreground/60"
           />
           <span className="font-mono text-[0.62rem] text-muted-foreground/50">
-            {scored.length} of {items.length}
+            {t("cmdk.counter", scored.length, items.length)}
           </span>
         </div>
         <div ref={listRef} className="flex max-h-[60vh] flex-col overflow-auto py-1">
           {scored.length === 0 ? (
-            <div className="px-4 py-6 text-center text-xs text-muted-foreground">No matches.</div>
+            <div className="px-4 py-6 text-center text-xs text-muted-foreground">
+              {t("cmdk.noMatches")}
+            </div>
           ) : (
             scored.map((s, idx) => (
               <Row
@@ -222,13 +226,13 @@ export function CommandPalette({
         </div>
         <footer className="flex items-center gap-4 border-t border-border bg-sidebar/20 px-4 py-1.5 font-mono text-[0.62rem] text-muted-foreground/70">
           <span>
-            <kbd className="tp-kbd mr-1">↵</kbd> select
+            <kbd className="tp-kbd mr-1">↵</kbd> {t("cmdk.select")}
           </span>
           <span>
-            <kbd className="tp-kbd mr-1">↑↓</kbd> nav
+            <kbd className="tp-kbd mr-1">↑↓</kbd> {t("cmdk.nav")}
           </span>
           <span className="ml-auto">
-            <kbd className="tp-kbd mr-1">esc</kbd> close
+            <kbd className="tp-kbd mr-1">esc</kbd> {t("cmdk.close")}
           </span>
         </footer>
       </div>

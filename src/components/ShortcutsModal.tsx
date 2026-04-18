@@ -1,50 +1,52 @@
 import { useEffect } from "react";
+import { useT } from "@/lib/i18n";
 
-type Shortcut = { keys: string[]; desc: string };
-type Group = { title: string; items: Shortcut[] };
+type Shortcut = { keys: string[]; descKey: Parameters<ReturnType<typeof useT>>[0] };
+type Group = { titleKey: Parameters<ReturnType<typeof useT>>[0]; items: Shortcut[] };
 
 const GROUPS: Group[] = [
   {
-    title: "Global",
+    titleKey: "shortcuts.group.global",
     items: [
-      { keys: ["⌘", "K"], desc: "Command palette (actions, connections, tables; ⌘P also works)" },
-      { keys: ["⌘", ","], desc: "Open Settings" },
-      { keys: ["⌘", "/"], desc: "Show this help" },
-      { keys: ["⌘", "S"], desc: "Toggle connections sidebar" },
-      { keys: ["⌘", "+"], desc: "Increase font size" },
-      { keys: ["⌘", "-"], desc: "Decrease font size" },
+      { keys: ["⌘", "K"], descKey: "shortcuts.item.palette" },
+      { keys: ["⌘", ","], descKey: "shortcuts.item.settings" },
+      { keys: ["⌘", "/"], descKey: "shortcuts.item.help" },
+      { keys: ["⌘", "S"], descKey: "shortcuts.item.sidebar" },
+      { keys: ["⌘", "+"], descKey: "shortcuts.item.fontIn" },
+      { keys: ["⌘", "-"], descKey: "shortcuts.item.fontOut" },
     ],
   },
   {
-    title: "Tabs",
+    titleKey: "shortcuts.group.tabs",
     items: [
-      { keys: ["⌘", "T"], desc: "New SQL editor tab (on active connection)" },
-      { keys: ["⌘", "W"], desc: "Close active tab" },
+      { keys: ["⌘", "T"], descKey: "shortcuts.item.newTab" },
+      { keys: ["⌘", "W"], descKey: "shortcuts.item.closeTab" },
     ],
   },
   {
-    title: "SQL Editor",
+    titleKey: "shortcuts.group.editor",
     items: [
-      { keys: ["⌘", "↵"], desc: "Run statement at cursor" },
-      { keys: ["⇧", "⌘", "↵"], desc: "Run all statements" },
-      { keys: ["⌥", "↵"], desc: "EXPLAIN this statement" },
-      { keys: ["⇧", "⌘", "F"], desc: "Format SQL" },
-      { keys: ["⇧", "⌘", "D"], desc: "Split pane right" },
-      { keys: ["⌘", "F"], desc: "Filter results (when editor not focused)" },
+      { keys: ["⌘", "↵"], descKey: "shortcuts.item.runAt" },
+      { keys: ["⇧", "⌘", "↵"], descKey: "shortcuts.item.runAll" },
+      { keys: ["⌥", "↵"], descKey: "shortcuts.item.explain" },
+      { keys: ["⇧", "⌘", "F"], descKey: "shortcuts.item.format" },
+      { keys: ["⇧", "⌘", "D"], descKey: "shortcuts.item.splitRight" },
+      { keys: ["⌘", "F"], descKey: "shortcuts.item.filterResults" },
     ],
   },
   {
-    title: "Table view",
+    titleKey: "shortcuts.group.table",
     items: [
-      { keys: ["dblclick"], desc: "Edit cell" },
-      { keys: ["↵"], desc: "Edit cell (when selected)" },
-      { keys: ["right-click"], desc: "Row actions (delete / undo)" },
-      { keys: ["dblclick", "on table"], desc: "Open in new tab" },
+      { keys: ["dblclick"], descKey: "shortcuts.item.editCellDbl" },
+      { keys: ["↵"], descKey: "shortcuts.item.editCellEnter" },
+      { keys: ["right-click"], descKey: "shortcuts.item.rowActions" },
+      { keys: ["dblclick"], descKey: "shortcuts.item.openTable" },
     ],
   },
 ];
 
 export function ShortcutsModal({ onClose }: { onClose: () => void }) {
+  const t = useT();
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (e.key === "Escape") onClose();
@@ -71,7 +73,9 @@ export function ShortcutsModal({ onClose }: { onClose: () => void }) {
             <span className="font-mono text-[0.62rem] uppercase tracking-[0.14em] text-muted-foreground/80">
               Keyboard
             </span>
-            <h2 className="font-display text-[1.02rem] font-medium tracking-tight">Shortcuts</h2>
+            <h2 className="font-display text-[1.02rem] font-medium tracking-tight">
+              {t("shortcuts.title")}
+            </h2>
           </div>
           <button
             type="button"
@@ -84,18 +88,18 @@ export function ShortcutsModal({ onClose }: { onClose: () => void }) {
         </header>
         <div className="flex max-h-[65vh] flex-col gap-5 overflow-auto p-5">
           {GROUPS.map((g) => (
-            <section key={g.title} className="flex flex-col gap-1.5">
-              <h3 className="tp-section-title">{g.title}</h3>
+            <section key={g.titleKey} className="flex flex-col gap-1.5">
+              <h3 className="tp-section-title">{t(g.titleKey)}</h3>
               <dl className="flex flex-col divide-y divide-border/40">
                 {g.items.map((s) => (
                   <div
-                    key={`${g.title}:${s.desc}`}
+                    key={`${g.titleKey}:${s.descKey}`}
                     className="flex items-center justify-between gap-4 py-1.5"
                   >
-                    <dt className="text-[0.82rem] text-foreground/90">{s.desc}</dt>
+                    <dt className="text-[0.82rem] text-foreground/90">{t(s.descKey)}</dt>
                     <dd className="flex items-center gap-1">
                       {s.keys.map((k) => (
-                        <span key={`${s.desc}-${k}`} className="tp-kbd px-1.5">
+                        <span key={`${s.descKey}-${k}`} className="tp-kbd px-1.5">
                           {k}
                         </span>
                       ))}
@@ -108,7 +112,7 @@ export function ShortcutsModal({ onClose }: { onClose: () => void }) {
         </div>
         <footer className="flex items-center justify-end gap-2 border-t border-border bg-sidebar/20 px-5 py-2">
           <span className="text-[0.65rem] text-muted-foreground/70">
-            Press <span className="tp-kbd">esc</span> to close
+            {t("shortcuts.pressEscToClose")}
           </span>
         </footer>
       </div>

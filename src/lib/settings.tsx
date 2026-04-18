@@ -9,6 +9,7 @@ import {
 } from "react";
 
 export type ThemeMode = "system" | "dark" | "light";
+export type LocaleMode = "auto" | "en" | "ja";
 
 export type Settings = {
   theme: ThemeMode;
@@ -18,6 +19,8 @@ export type Settings = {
   tabWidth: 2 | 4;
   /** 破壊的操作 (スニペット削除など) の前に confirm を出すか */
   confirmDestructive: boolean;
+  /** UI の言語。"auto" は OS 設定から推測 */
+  locale: LocaleMode;
 };
 
 const DEFAULTS: Settings = {
@@ -25,6 +28,7 @@ const DEFAULTS: Settings = {
   fontScale: 14,
   tabWidth: 2,
   confirmDestructive: true,
+  locale: "auto",
 };
 
 const STORAGE_KEY = "porpoise.settings.v1";
@@ -39,10 +43,15 @@ function readSettings(): Settings {
       fontScale: clamp(parsed.fontScale ?? DEFAULTS.fontScale, 11, 18),
       tabWidth: parsed.tabWidth === 4 ? 4 : 2,
       confirmDestructive: parsed.confirmDestructive !== false,
+      locale: normalizeLocale(parsed.locale),
     };
   } catch {
     return DEFAULTS;
   }
+}
+
+function normalizeLocale(v: unknown): LocaleMode {
+  return v === "en" || v === "ja" ? v : "auto";
 }
 
 function normalizeTheme(v: unknown): ThemeMode {

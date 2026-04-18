@@ -15,6 +15,7 @@ function isLongEditor(kind: EditorKind): boolean {
 import { save } from "@tauri-apps/plugin-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useTabStatusPublish } from "@/lib/tab-status";
 import {
@@ -123,6 +124,7 @@ function filterDraftToFilter(d: FilterDraft): Filter | null {
 
 export function TableView({ connectionId, database, table, columns, tabId }: Props) {
   const publishStatus = useTabStatusPublish(tabId);
+  const t = useT();
   const [state, setState] = useState<State>(initialState);
   const [edits, setEdits] = useState<EditMap>({});
   const [newRows, setNewRows] = useState<NewRow[]>([]);
@@ -977,11 +979,11 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
         {!state.loading && state.rows.length === 0 && newRows.length === 0 && (
           <EmptyState
             variant="compact"
-            title={appliedFilters.length > 0 ? "No rows match your filters" : "No rows"}
+            title={
+              appliedFilters.length > 0 ? t("empty.noRowsFiltered.title") : t("empty.noRows.title")
+            }
             description={
-              appliedFilters.length > 0
-                ? "Try adjusting the filters or hit Unset to clear them."
-                : "This table has no rows yet. Use + Row to add one if the table is editable."
+              appliedFilters.length > 0 ? t("empty.noRowsFiltered.desc") : t("empty.noRows.desc")
             }
           />
         )}
@@ -2144,6 +2146,7 @@ function CommitModal({
   committing: boolean;
   error: string | null;
 }) {
+  const t = useT();
   // 更新差分: 削除予定行はスキップ
   const updateDiffs = useMemo(() => {
     const list: {
@@ -2181,10 +2184,7 @@ function CommitModal({
           </span>
         </header>
         <div className="flex-1 overflow-auto px-5 py-3">
-          <p className="mb-3 text-xs text-muted-foreground">
-            変更は 1 つのトランザクションでコミットされます。影響行が想定より多い場合は
-            自動ロールバックします。
-          </p>
+          <p className="mb-3 text-xs text-muted-foreground">{t("table.commit.note")}</p>
 
           {updateDiffs.length > 0 && (
             <section className="mb-4">
