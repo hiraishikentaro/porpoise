@@ -7,43 +7,14 @@ export const STATUS_COLORS: StatusColor[] = ["gray", "blue", "amber", "green", "
  * contrasting foreground. Gradients read as "inked lozenge" rather than flat
  * circles, which is the one detail you notice at 20 px.
  */
+// Gruvbox の 6 色をそのまま avatar palette に割り当てる
 const palette: Record<StatusColor, { from: string; to: string; fg: string; ring: string }> = {
-  gray: {
-    from: "oklch(0.55 0.02 250)",
-    to: "oklch(0.38 0.015 250)",
-    fg: "oklch(0.97 0.005 90)",
-    ring: "oklch(0.55 0.02 250)",
-  },
-  blue: {
-    from: "oklch(0.62 0.18 252)",
-    to: "oklch(0.44 0.17 256)",
-    fg: "oklch(0.98 0.005 90)",
-    ring: "oklch(0.62 0.18 252)",
-  },
-  amber: {
-    from: "oklch(0.84 0.16 74)",
-    to: "oklch(0.66 0.15 62)",
-    fg: "oklch(0.2 0.01 60)",
-    ring: "oklch(0.78 0.16 68)",
-  },
-  green: {
-    from: "oklch(0.74 0.16 148)",
-    to: "oklch(0.54 0.15 152)",
-    fg: "oklch(0.98 0.005 90)",
-    ring: "oklch(0.7 0.16 148)",
-  },
-  red: {
-    from: "oklch(0.7 0.22 22)",
-    to: "oklch(0.52 0.2 18)",
-    fg: "oklch(0.98 0.005 90)",
-    ring: "oklch(0.64 0.22 22)",
-  },
-  pink: {
-    from: "oklch(0.76 0.2 340)",
-    to: "oklch(0.58 0.2 342)",
-    fg: "oklch(0.2 0.01 340)",
-    ring: "oklch(0.7 0.2 340)",
-  },
+  gray: { from: "#928374", to: "#665c54", fg: "#fbf1c7", ring: "#928374" },
+  blue: { from: "#83a598", to: "#458588", fg: "#282828", ring: "#458588" },
+  amber: { from: "#fabd2f", to: "#d79921", fg: "#282828", ring: "#d79921" },
+  green: { from: "#b8bb26", to: "#98971a", fg: "#282828", ring: "#98971a" },
+  red: { from: "#fb4934", to: "#cc241d", fg: "#fbf1c7", ring: "#cc241d" },
+  pink: { from: "#d3869b", to: "#b16286", fg: "#282828", ring: "#b16286" },
 };
 
 export function statusColorVars(color: StatusColor): React.CSSProperties {
