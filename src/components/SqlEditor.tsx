@@ -39,11 +39,15 @@ type Props = {
   onClose?: () => void;
 };
 
+type RunTabResult =
+  | { kind: "ok"; sql: string; result: QueryResult }
+  | { kind: "error"; sql: string; message: string };
+
 type RunState =
   | { kind: "idle" }
-  | { kind: "running" }
+  | { kind: "running"; index?: number; total?: number }
   | { kind: "error"; message: string }
-  | { kind: "done"; result: QueryResult };
+  | { kind: "done"; tabs: RunTabResult[] };
 
 /**
  * カーソル位置のステートメントを切り出し、エディタ内の開始行も返す。
@@ -78,6 +82,83 @@ function statementAtCursor(view: EditorView): { text: string; startLine: number 
     text: doc.slice(start, end).trim(),
     startLine: state.doc.lineAt(firstNonWs).number,
   };
+}
+
+/**
+ * ; で区切られた複数ステートメントを配列に分割する。
+ * ' " ` で囲まれた string 内の ; や -- / * ... * / コメント内の ; は無視。
+ */
+function splitStatements(sql: string): string[] {
+  const out: string[] = [];
+  let cur = "";
+  let i = 0;
+  let quote: '"' | "'" | "`" | null = null;
+  let inLineComment = false;
+  let inBlockComment = false;
+
+  while (i < sql.length) {
+    const ch = sql[i];
+    const next = sql[i + 1];
+
+    if (inLineComment) {
+      cur += ch;
+      if (ch === "\n") inLineComment = false;
+      i++;
+      continue;
+    }
+    if (inBlockComment) {
+      cur += ch;
+      if (ch === "*" && next === "/") {
+        cur += next;
+        i += 2;
+        inBlockComment = false;
+        continue;
+      }
+      i++;
+      continue;
+    }
+    if (quote) {
+      cur += ch;
+      if (ch === "\\" && next !== undefined) {
+        cur += next;
+        i += 2;
+        continue;
+      }
+      if (ch === quote) quote = null;
+      i++;
+      continue;
+    }
+    if (ch === "-" && next === "-") {
+      inLineComment = true;
+      cur += `${ch}${next}`;
+      i += 2;
+      continue;
+    }
+    if (ch === "/" && next === "*") {
+      inBlockComment = true;
+      cur += `${ch}${next}`;
+      i += 2;
+      continue;
+    }
+    if (ch === "'" || ch === '"' || ch === "`") {
+      quote = ch;
+      cur += ch;
+      i++;
+      continue;
+    }
+    if (ch === ";") {
+      const trimmed = cur.trim();
+      if (trimmed) out.push(trimmed);
+      cur = "";
+      i++;
+      continue;
+    }
+    cur += ch;
+    i++;
+  }
+  const tail = cur.trim();
+  if (tail) out.push(tail);
+  return out;
 }
 
 /**
@@ -194,12 +275,11 @@ export function SqlEditor({
         setRunState({ kind: "error", message: "Empty statement." });
         return;
       }
-      // 実行開始時にエラーハイライトをクリア
       viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
       setRunState({ kind: "running" });
       try {
         const result = await executeQuery(connectionId, trimmed, databaseRef.current);
-        setRunState({ kind: "done", result });
+        setRunState({ kind: "done", tabs: [{ kind: "ok", sql: trimmed, result }] });
       } catch (e) {
         const message = String(e);
         setRunState({ kind: "error", message });
@@ -213,6 +293,35 @@ export function SqlEditor({
     [connectionId],
   );
 
+  /** 複数ステートメントを順に実行し、全結果をタブに並べる */
+  const runMany = useCallback(
+    async (sql: string) => {
+      const stmts = splitStatements(sql);
+      if (stmts.length === 0) {
+        setRunState({ kind: "error", message: "Empty statement." });
+        return;
+      }
+      if (stmts.length === 1) {
+        await run(stmts[0], 1);
+        return;
+      }
+      viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
+      const tabs: RunTabResult[] = [];
+      for (let i = 0; i < stmts.length; i++) {
+        setRunState({ kind: "running", index: i + 1, total: stmts.length });
+        try {
+          const result = await executeQuery(connectionId, stmts[i], databaseRef.current);
+          tabs.push({ kind: "ok", sql: stmts[i], result });
+        } catch (e) {
+          tabs.push({ kind: "error", sql: stmts[i], message: String(e) });
+          // エラーでも残りは継続 (TablePlus と同じ挙動)
+        }
+      }
+      setRunState({ kind: "done", tabs });
+    },
+    [connectionId, run],
+  );
+
   const runAt = useCallback(() => {
     if (!viewRef.current) return;
     const { text, startLine } = statementAtCursor(viewRef.current);
@@ -220,8 +329,8 @@ export function SqlEditor({
   }, [run]);
 
   const runAll = useCallback(() => {
-    run(sqlTextRef.current, 1);
-  }, [run]);
+    runMany(sqlTextRef.current);
+  }, [runMany]);
 
   const explainAt = useCallback(() => {
     if (!viewRef.current) return;
@@ -1143,6 +1252,13 @@ function ResultsPane({
   database: string | null;
   lastSql: React.RefObject<string>;
 }) {
+  const [activeTab, setActiveTab] = useState(0);
+
+  // done に遷移したら先頭タブをアクティブにする (前回インデックスが超過しないよう)
+  useEffect(() => {
+    if (runState.kind === "done") setActiveTab(0);
+  }, [runState.kind]);
+
   if (runState.kind === "idle") {
     return (
       <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
@@ -1151,8 +1267,12 @@ function ResultsPane({
     );
   }
   if (runState.kind === "running") {
+    const suffix =
+      runState.total && runState.total > 1 ? ` (${runState.index} / ${runState.total})` : "";
     return (
-      <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">Running…</div>
+      <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+        Running…{suffix}
+      </div>
     );
   }
   if (runState.kind === "error") {
@@ -1162,10 +1282,90 @@ function ResultsPane({
       </div>
     );
   }
-  const r = runState.result;
+
+  const tabs = runState.tabs;
+  const active = tabs[Math.min(activeTab, tabs.length - 1)];
+  if (!active) {
+    return (
+      <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
+        No result.
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex max-h-[55%] min-h-[220px] flex-col border-t border-border">
+      {tabs.length > 1 && (
+        <div className="flex h-7 shrink-0 items-stretch overflow-x-auto border-b border-border bg-sidebar/20 text-[0.7rem]">
+          {tabs.map((t, i) => {
+            const isActive = i === activeTab;
+            const label =
+              t.kind === "error"
+                ? `Query ${i + 1}`
+                : t.result.kind === "select"
+                  ? `Query ${i + 1} · ${t.result.returned} rows`
+                  : `Query ${i + 1} · ${t.result.rows} affected`;
+            return (
+              <button
+                key={`tab-${t.sql.slice(0, 24)}-${t.kind === "error" ? "e" : "o"}`}
+                type="button"
+                onClick={() => setActiveTab(i)}
+                title={t.sql}
+                className={`inline-flex h-full items-center gap-1.5 border-r border-border/70 px-3 transition-colors ${
+                  isActive
+                    ? "bg-background text-foreground shadow-[inset_0_2px_0_var(--accent)]"
+                    : "text-muted-foreground hover:bg-sidebar-accent/40 hover:text-foreground"
+                }`}
+              >
+                {t.kind === "error" && (
+                  <span
+                    aria-hidden
+                    className="inline-block h-1.5 w-1.5 rounded-full bg-destructive"
+                  />
+                )}
+                <span className="truncate font-mono">{label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <SingleResultView
+        tab={active}
+        connectionId={connectionId}
+        database={database}
+        lastSql={lastSql}
+      />
+    </div>
+  );
+}
+
+function SingleResultView({
+  tab,
+  connectionId,
+  database,
+  lastSql,
+}: {
+  tab: RunTabResult;
+  connectionId: string;
+  database: string | null;
+  lastSql: React.RefObject<string>;
+}) {
+  if (tab.kind === "error") {
+    return (
+      <div className="min-h-0 flex-1 overflow-auto bg-destructive/10 p-4">
+        <pre className="mb-2 font-mono text-[0.72rem] whitespace-pre-wrap text-destructive">
+          {tab.message}
+        </pre>
+        <pre className="font-mono text-[0.7rem] whitespace-pre-wrap text-muted-foreground">
+          {tab.sql}
+        </pre>
+      </div>
+    );
+  }
+  const r = tab.result;
   if (r.kind === "affected") {
     return (
-      <div className="border-t border-border px-4 py-3 text-xs">
+      <div className="flex-1 px-4 py-3 text-xs">
         <span className="text-foreground">{r.rows}</span>{" "}
         <span className="text-muted-foreground">row{r.rows === 1 ? "" : "s"} affected</span>
         <span className="ml-2 text-muted-foreground/60">· {r.elapsed_ms} ms</span>
@@ -1173,7 +1373,7 @@ function ResultsPane({
     );
   }
   return (
-    <div className="flex max-h-[45%] min-h-[200px] flex-col border-t border-border">
+    <div className="flex min-h-0 flex-1 flex-col">
       <header className="flex items-center justify-between px-4 py-1.5 text-xs">
         <span className="text-muted-foreground">
           {r.returned} row{r.returned === 1 ? "" : "s"}
