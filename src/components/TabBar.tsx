@@ -16,13 +16,18 @@ export type TableTab = {
   table: string;
 };
 
+export type EditorPane = {
+  id: string;
+  sql: string;
+  database: string | null;
+};
+
 export type EditorTab = {
   id: string;
   kind: "editor";
   connection: SavedConnection;
   title: string;
-  sql: string;
-  database: string | null;
+  panes: EditorPane[];
 };
 
 export type Tab = ConnectionTab | TableTab | EditorTab;
@@ -189,7 +194,8 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
                   {tab.kind === "editor" && (
                     <span className="w-full truncate font-mono text-[0.6rem] text-muted-foreground/60">
                       {tab.connection.name}
-                      {tab.database && ` · ${tab.database}`}
+                      {tab.panes[0]?.database && ` · ${tab.panes[0].database}`}
+                      {tab.panes.length > 1 && ` · ${tab.panes.length} panes`}
                     </span>
                   )}
                 </span>

@@ -33,6 +33,10 @@ type Props = {
   onDatabaseChange: (database: string | null) => void;
   /** 履歴から SQL を新規エディタタブとして開く */
   onOpenInNewEditor?: (sql: string, database: string | null) => void;
+  /** 分割: このエディタの右に新しい pane を追加 */
+  onSplit?: () => void;
+  /** この pane を閉じる (複数 pane がある時のみ指定される) */
+  onClose?: () => void;
 };
 
 type RunState =
@@ -132,6 +136,8 @@ export function SqlEditor({
   onChange,
   onDatabaseChange,
   onOpenInNewEditor,
+  onSplit,
+  onClose,
 }: Props) {
   const [sqlText, setSqlText] = useState(initialSql);
   const [database, setDatabase] = useState<string | null>(initialDatabase);
@@ -394,6 +400,28 @@ export function SqlEditor({
           >
             Run all
           </button>
+          {onSplit && (
+            <button
+              type="button"
+              onClick={onSplit}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-accent hover:text-accent"
+              title="Split pane right (⌘⇧D)"
+              aria-label="Split pane right"
+            >
+              <SplitIcon />
+            </button>
+          )}
+          {onClose && (
+            <button
+              type="button"
+              onClick={onClose}
+              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+              title="Close this pane"
+              aria-label="Close pane"
+            >
+              ✕
+            </button>
+          )}
         </div>
       </header>
 
@@ -1284,5 +1312,15 @@ function QueryExportMenu({
         </div>
       )}
     </div>
+  );
+}
+
+function SplitIcon() {
+  return (
+    <svg viewBox="0 0 16 16" className="h-3.5 w-3.5" role="img" aria-label="split" fill="none">
+      <title>split pane</title>
+      <rect x="2" y="3" width="12" height="10" rx="1.3" stroke="currentColor" strokeWidth="1.3" />
+      <path d="M8 3v10" stroke="currentColor" strokeWidth="1.3" />
+    </svg>
   );
 }

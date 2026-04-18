@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
+import { EditorPanes } from "@/components/EditorPanes";
 import { SavedConnections } from "@/components/SavedConnections";
 import { SettingsModal } from "@/components/SettingsModal";
 import { ShortcutsModal } from "@/components/ShortcutsModal";
-import { SqlEditor } from "@/components/SqlEditor";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
 import { TablePalette } from "@/components/TablePalette";
@@ -21,8 +21,11 @@ const tableTabId = (connId: string, database: string, table: string) =>
   `table:${connId}:${database}:${table}`;
 const newEditorTabId = () =>
   `editor:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
+const newPaneId = () => `pane:${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 
-const PERSIST_KEY = "porpoise.tabs.v1";
+const PERSIST_KEY = "porpoise.tabs.v2";
+
+type PersistedPane = { id: string; sql: string; database: string | null };
 
 type PersistedTab =
   | { id: string; kind: "connection"; connectionId: string }
@@ -32,8 +35,7 @@ type PersistedTab =
       kind: "editor";
       connectionId: string;
       title: string;
-      sql: string;
-      database: string | null;
+      panes: PersistedPane[];
     };
 
 type PersistedState = {
@@ -74,8 +76,7 @@ function serializeTabs(tabs: Tab[], activeTabId: string | null, editorSeq: numbe
         kind: "editor",
         connectionId: t.connection.id,
         title: t.title,
-        sql: t.sql,
-        database: t.database,
+        panes: t.panes.map((p) => ({ id: p.id, sql: p.sql, database: p.database })),
       };
     }),
     activeTabId,
@@ -106,13 +107,13 @@ function hydrateTabs(
         table: p.table,
       });
     } else {
+      if (!p.panes || p.panes.length === 0) continue;
       restored.push({
         id: p.id,
         kind: "editor",
         connection: conn,
         title: p.title,
-        sql: p.sql,
-        database: p.database,
+        panes: p.panes,
       });
     }
   }
@@ -226,19 +227,57 @@ function App() {
       const id = newEditorTabId();
       const title = `Query ${editorSeq}`;
       setEditorSeq((v) => v + 1);
-      setTabs((prev) => [...prev, { id, kind: "editor", connection: conn, title, sql, database }]);
+      const pane = { id: newPaneId(), sql, database };
+      setTabs((prev) => [...prev, { id, kind: "editor", connection: conn, title, panes: [pane] }]);
       setActiveTabId(id);
     },
     [editorSeq],
   );
 
-  const updateEditorSql = useCallback((id: string, sql: string) => {
-    setTabs((prev) => prev.map((t) => (t.id === id && t.kind === "editor" ? { ...t, sql } : t)));
+  const updatePaneSql = useCallback((tabId: string, paneId: string, sql: string) => {
+    setTabs((prev) =>
+      prev.map((t) =>
+        t.id === tabId && t.kind === "editor"
+          ? { ...t, panes: t.panes.map((p) => (p.id === paneId ? { ...p, sql } : p)) }
+          : t,
+      ),
+    );
   }, []);
 
-  const updateEditorDatabase = useCallback((id: string, database: string | null) => {
+  const updatePaneDatabase = useCallback(
+    (tabId: string, paneId: string, database: string | null) => {
+      setTabs((prev) =>
+        prev.map((t) =>
+          t.id === tabId && t.kind === "editor"
+            ? { ...t, panes: t.panes.map((p) => (p.id === paneId ? { ...p, database } : p)) }
+            : t,
+        ),
+      );
+    },
+    [],
+  );
+
+  const addPane = useCallback((tabId: string) => {
     setTabs((prev) =>
-      prev.map((t) => (t.id === id && t.kind === "editor" ? { ...t, database } : t)),
+      prev.map((t) => {
+        if (t.id !== tabId || t.kind !== "editor") return t;
+        // 新しい pane は最後の pane の database を引き継ぐ (初期値の convention)
+        const lastDb = t.panes[t.panes.length - 1]?.database ?? null;
+        return {
+          ...t,
+          panes: [...t.panes, { id: newPaneId(), sql: "", database: lastDb }],
+        };
+      }),
+    );
+  }, []);
+
+  const removePane = useCallback((tabId: string, paneId: string) => {
+    setTabs((prev) =>
+      prev.map((t) => {
+        if (t.id !== tabId || t.kind !== "editor") return t;
+        if (t.panes.length <= 1) return t; // 最後の pane は残す
+        return { ...t, panes: t.panes.filter((p) => p.id !== paneId) };
+      }),
     );
   }, []);
 
@@ -350,6 +389,8 @@ function App() {
   tabsRef.current = tabs;
   const openEditorTabRef = useRef(openEditorTab);
   openEditorTabRef.current = openEditorTab;
+  const addPaneRef = useRef(addPane);
+  addPaneRef.current = addPane;
 
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
@@ -369,10 +410,10 @@ function App() {
         const id = activeTabIdRef.current;
         const activeTab = id ? tabsRef.current.find((t) => t.id === id) : null;
         if (!activeTab) return;
-        // エディタタブの database を引き継ぐ、無ければ null
+        // エディタタブは最後の pane の database、table タブはそのまま、他は null
         const db =
           activeTab.kind === "editor"
-            ? activeTab.database
+            ? (activeTab.panes[activeTab.panes.length - 1]?.database ?? null)
             : activeTab.kind === "table"
               ? activeTab.database
               : null;
@@ -428,6 +469,17 @@ function App() {
         e.stopPropagation();
         const next = Math.max(11, settingsRef.current.fontScale - 1);
         updateSettingRef.current("fontScale", next);
+        return;
+      }
+
+      // ⌘⇧D でアクティブな editor タブに pane を追加
+      if (key === "d" && e.shiftKey) {
+        const id = activeTabIdRef.current;
+        const active = id ? tabsRef.current.find((t) => t.id === id) : null;
+        if (!active || active.kind !== "editor") return;
+        e.preventDefault();
+        e.stopPropagation();
+        addPaneRef.current(active.id);
         return;
       }
     }
@@ -582,12 +634,14 @@ function App() {
             }
             return (
               <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
-                <SqlEditor
-                  connectionId={tab.connection.id}
-                  initialSql={tab.sql}
-                  initialDatabase={tab.database}
-                  onChange={(sql) => updateEditorSql(tab.id, sql)}
-                  onDatabaseChange={(db) => updateEditorDatabase(tab.id, db)}
+                <EditorPanes
+                  tabId={tab.id}
+                  connection={tab.connection}
+                  panes={tab.panes}
+                  onPaneSqlChange={(paneId, sql) => updatePaneSql(tab.id, paneId, sql)}
+                  onPaneDatabaseChange={(paneId, db) => updatePaneDatabase(tab.id, paneId, db)}
+                  onAddPane={() => addPane(tab.id)}
+                  onRemovePane={(paneId) => removePane(tab.id, paneId)}
                   onOpenInNewEditor={(sql, db) => openEditorTab(tab.connection, db, sql)}
                 />
               </div>
