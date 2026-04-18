@@ -371,11 +371,6 @@ export function ConnectionForm({ initial, onSaved, onOpened }: Props) {
         <Row label="Color">
           <div className="flex items-center gap-2 py-1">
             <ColorPicker value={values.colorLabel} onChange={(v) => update("colorLabel", v)} />
-            <span className="text-xs text-muted-foreground">
-              {values.colorLabel
-                ? "タブ / アバターの色に反映 (prod=red などで誤爆防止)"
-                : "未設定: 名前からの自動配色"}
-            </span>
           </div>
         </Row>
 
@@ -527,7 +522,7 @@ const COLOR_CHOICES: {
   { value: "blue", label: "blue", bg: "oklch(0.55 0.18 252)" },
   { value: "amber", label: "amber", bg: "oklch(0.74 0.16 68)" },
   { value: "green", label: "green", bg: "oklch(0.62 0.16 148)" },
-  { value: "red", label: "red / prod", bg: "oklch(0.6 0.22 22)" },
+  { value: "red", label: "red", bg: "oklch(0.6 0.22 22)" },
   { value: "pink", label: "pink", bg: "oklch(0.68 0.2 340)" },
 ];
 

@@ -7,7 +7,7 @@ const GROUPS: Group[] = [
   {
     title: "Global",
     items: [
-      { keys: ["⌘", "K"], desc: "Command palette (actions, connections, tables)" },
+      { keys: ["⌘", "K"], desc: "Command palette (actions, connections, tables; ⌘P also works)" },
       { keys: ["⌘", ","], desc: "Open Settings" },
       { keys: ["⌘", "/"], desc: "Show this help" },
       { keys: ["⌘", "S"], desc: "Toggle connections sidebar" },
@@ -20,7 +20,6 @@ const GROUPS: Group[] = [
     items: [
       { keys: ["⌘", "T"], desc: "New SQL editor tab (on active connection)" },
       { keys: ["⌘", "W"], desc: "Close active tab" },
-      { keys: ["⌘", "P"], desc: "Search tables across databases (fuzzy)" },
     ],
   },
   {

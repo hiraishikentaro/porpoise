@@ -9,7 +9,6 @@ import { ShortcutsModal } from "@/components/ShortcutsModal";
 import { StatusBar } from "@/components/StatusBar";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
-import { TablePalette } from "@/components/TablePalette";
 import { useSettings } from "@/lib/settings";
 import {
   activeConnections,
@@ -138,7 +137,6 @@ function App() {
   const [toast, setToast] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editorSeq, setEditorSeq] = useState(1);
-  const [paletteOpen, setPaletteOpen] = useState(false);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
@@ -537,18 +535,8 @@ function App() {
         return;
       }
 
-      if (key === "p" && !e.shiftKey) {
-        const id = activeTabIdRef.current;
-        const activeTab = id ? tabsRef.current.find((t) => t.id === id) : null;
-        if (!activeTab) return;
-        e.preventDefault();
-        e.stopPropagation();
-        setPaletteOpen(true);
-        return;
-      }
-
-      // ⌘K で Command Palette
-      if (key === "k" && !e.shiftKey) {
+      // ⌘K / ⌘P で Command Palette (⌘P は macOS の慣習で同じ扱い)
+      if ((key === "k" || key === "p") && !e.shiftKey) {
         e.preventDefault();
         e.stopPropagation();
         setCommandPaletteOpen((v) => !v);
@@ -820,17 +808,6 @@ function App() {
             )}
           </div>
         </section>
-
-        {paletteOpen && activeTab && (
-          <TablePalette
-            connection={activeTab.connection}
-            onSelect={(database, table) => {
-              upsertTableTab(activeTab.connection, database, table);
-              setPaletteOpen(false);
-            }}
-            onClose={() => setPaletteOpen(false)}
-          />
-        )}
 
         <CommandPalette
           open={commandPaletteOpen}
