@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { fuzzyMatch } from "@/lib/fuzzy";
 import { type AllTablesEntry, listAllTables, type SavedConnection } from "@/lib/tauri";
 
 type Props = {
@@ -193,37 +194,6 @@ function renderHighlighted(label: string, matches: number[]): React.ReactNode {
     }
   }
   return out;
-}
-
-/**
- * 素朴な fuzzy マッチ。文字を順番に見つけて、連続マッチや単語境界にボーナス。
- * 見つからなければ null を返す。
- */
-function fuzzyMatch(needle: string, haystack: string): { score: number; indices: number[] } | null {
-  const n = needle.toLowerCase();
-  const h = haystack.toLowerCase();
-  const indices: number[] = [];
-  let score = 0;
-  let prev = -2;
-  let hi = 0;
-  for (let ni = 0; ni < n.length; ni++) {
-    const target = n[ni];
-    while (hi < h.length && h[hi] !== target) hi++;
-    if (hi >= h.length) return null;
-    indices.push(hi);
-    // 連続でマッチ: +10
-    if (hi === prev + 1) score += 10;
-    else score += 1;
-    // 先頭 or '.' / '_' / '-' の直後: +5 (単語境界)
-    if (hi === 0 || /[._\- ]/.test(h[hi - 1] ?? "")) score += 5;
-    prev = hi;
-    hi++;
-  }
-  // 短い label ほど優遇
-  score -= Math.floor(h.length / 20);
-  // マッチ位置の早さを少し評価 (最初のマッチ index が小さいほうが良い)
-  if (indices.length > 0) score -= Math.floor(indices[0] / 4);
-  return { score, indices };
 }
 
 function SearchIcon() {

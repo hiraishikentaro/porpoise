@@ -1,10 +1,12 @@
 import { useCallback, useEffect, useRef, useState } from "react";
+import { CommandPalette } from "@/components/CommandPalette";
 import { ConnectionForm } from "@/components/ConnectionForm";
 import { DatabaseBrowser } from "@/components/DatabaseBrowser";
 import { EditorPanes } from "@/components/EditorPanes";
 import { SavedConnections } from "@/components/SavedConnections";
 import { SettingsModal } from "@/components/SettingsModal";
 import { ShortcutsModal } from "@/components/ShortcutsModal";
+import { StatusBar } from "@/components/StatusBar";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
 import { TablePalette } from "@/components/TablePalette";
@@ -129,12 +131,15 @@ function App() {
   const [selected, setSelected] = useState<SavedConnection | null>(null);
   const [refreshKey, setRefreshKey] = useState(0);
   const [activeIds, setActiveIds] = useState<Set<string>>(new Set());
+  const [connectionVersions, setConnectionVersions] = useState<Map<string, string>>(new Map());
+  const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editorSeq, setEditorSeq] = useState(1);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
   const [settingsOpen, setSettingsOpen] = useState(false);
   const [shortcutsOpen, setShortcutsOpen] = useState(false);
   const [focusedPaneId, setFocusedPaneId] = useState<string | null>(null);
@@ -173,12 +178,23 @@ function App() {
     return () => observer.disconnect();
   }, []);
 
+  // refreshKey が変わったら savedConnections を再取得
+  useEffect(() => {
+    if (refreshKey === 0) return;
+    listConnections()
+      .then(setSavedConnections)
+      .catch(() => {
+        // noop
+      });
+  }, [refreshKey]);
+
   useEffect(() => {
     (async () => {
       try {
         const [ids, list] = await Promise.all([activeConnections(), listConnections()]);
         const idSet = new Set(ids);
         setActiveIds(idSet);
+        setSavedConnections(list);
         const connectionsById = new Map(list.map((c) => [c.id, c]));
         const persisted = readPersisted();
         if (persisted) {
@@ -411,6 +427,11 @@ function App() {
 
   function handleOpened(conn: SavedConnection, version: string) {
     setActiveIds((prev) => new Set(prev).add(conn.id));
+    setConnectionVersions((prev) => {
+      const next = new Map(prev);
+      next.set(conn.id, version);
+      return next;
+    });
     upsertConnectionTab(conn);
     setToast(`Connected — MySQL ${version}`);
     window.setTimeout(() => setToast(null), 2400);
@@ -419,6 +440,12 @@ function App() {
   function handleClosed(id: string) {
     setActiveIds((prev) => {
       const next = new Set(prev);
+      next.delete(id);
+      return next;
+    });
+    setConnectionVersions((prev) => {
+      if (!prev.has(id)) return prev;
+      const next = new Map(prev);
       next.delete(id);
       return next;
     });
@@ -520,6 +547,14 @@ function App() {
         return;
       }
 
+      // ⌘K で Command Palette
+      if (key === "k" && !e.shiftKey) {
+        e.preventDefault();
+        e.stopPropagation();
+        setCommandPaletteOpen((v) => !v);
+        return;
+      }
+
       // ⌘/ or ⌘? で shortcuts help modal
       if (key === "/" || key === "?") {
         e.preventDefault();
@@ -618,194 +653,276 @@ function App() {
   const showEmptyState = !activeTab || !activeIds.has(activeTab.connection.id);
 
   return (
-    <main className="flex h-screen overflow-hidden">
-      {!sidebarCollapsed && (
-        <aside className="flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
-          <header className="flex h-12 items-center justify-between border-b border-sidebar-border/70 px-3">
-            <button
-              type="button"
-              onClick={handleNewTab}
-              className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-sidebar-border text-sidebar-foreground/90 transition-colors hover:border-accent hover:text-accent"
-              aria-label="New connection"
-              title="New connection"
-            >
-              <PlusIcon />
-            </button>
-            <div className="flex items-center gap-1.5">
-              <span
-                aria-hidden
-                className="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_1px_var(--accent-glow)]"
-              />
-              <span
-                className="text-[0.85rem] tracking-tight"
-                style={{
-                  fontFamily: "var(--font-display)",
-                  fontVariationSettings: '"SOFT" 50, "wght" 520, "opsz" 24',
-                }}
-              >
-                Porpoise
-              </span>
-            </div>
-            <div className="flex items-center gap-1">
+    <div className="flex h-screen flex-col overflow-hidden">
+      <main className="flex min-h-0 flex-1 overflow-hidden">
+        {!sidebarCollapsed && (
+          <aside className="flex w-80 shrink-0 flex-col border-r border-sidebar-border bg-sidebar text-sidebar-foreground">
+            <header className="flex h-12 items-center justify-between border-b border-sidebar-border/70 px-3">
               <button
                 type="button"
-                onClick={() => setSettingsOpen(true)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                aria-label="Settings"
-                title="Settings"
+                onClick={handleNewTab}
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md border border-sidebar-border text-sidebar-foreground/90 transition-colors hover:border-accent hover:text-accent"
+                aria-label="New connection"
+                title="New connection"
               >
-                <GearIcon />
+                <PlusIcon />
               </button>
-              <button
-                type="button"
-                onClick={() => setSidebarCollapsed(true)}
-                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
-                aria-label="Collapse sidebar"
-                title="Hide connections"
-              >
-                <SidebarCollapseIcon />
-              </button>
-            </div>
-          </header>
-          <SavedConnections
-            refreshKey={refreshKey}
-            selectedId={activeTab?.connection.id ?? selected?.id ?? null}
-            activeIds={activeIds}
-            onSelect={handleSelectConnection}
-            onDeleted={handleDeleted}
-            onOpened={handleOpened}
-            onClosed={handleClosed}
-          />
-        </aside>
-      )}
-
-      <section className="relative flex flex-1 flex-col overflow-hidden">
-        {sidebarCollapsed && (
-          <button
-            type="button"
-            onClick={() => setSidebarCollapsed(false)}
-            className="absolute top-1 left-2 z-20 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:border-accent hover:text-accent"
-            aria-label="Show connections"
-            title="Show connections"
-          >
-            <SidebarExpandIcon />
-          </button>
+              <div className="flex items-center gap-1.5">
+                <span
+                  aria-hidden
+                  className="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_1px_var(--accent-glow)]"
+                />
+                <span
+                  className="text-[0.85rem] tracking-tight"
+                  style={{
+                    fontFamily: "var(--font-display)",
+                    fontVariationSettings: '"SOFT" 50, "wght" 520, "opsz" 24',
+                  }}
+                >
+                  Porpoise
+                </span>
+              </div>
+              <div className="flex items-center gap-1">
+                <button
+                  type="button"
+                  onClick={() => setSettingsOpen(true)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  aria-label="Settings"
+                  title="Settings"
+                >
+                  <GearIcon />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setSidebarCollapsed(true)}
+                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  aria-label="Collapse sidebar"
+                  title="Hide connections"
+                >
+                  <SidebarCollapseIcon />
+                </button>
+              </div>
+            </header>
+            <SavedConnections
+              refreshKey={refreshKey}
+              selectedId={activeTab?.connection.id ?? selected?.id ?? null}
+              activeIds={activeIds}
+              onSelect={handleSelectConnection}
+              onDeleted={handleDeleted}
+              onOpened={handleOpened}
+              onClosed={handleClosed}
+            />
+          </aside>
         )}
 
-        <TabBar
-          tabs={tabs}
-          activeTabId={activeTabId}
-          onSelect={handleSelectTab}
-          onClose={handleCloseTab}
-          onNew={handleNewTab}
-          onReorder={reorderTabs}
-          onDropIntoEditor={mergeTabIntoEditor}
-        />
+        <section className="relative flex flex-1 flex-col overflow-hidden">
+          {sidebarCollapsed && (
+            <button
+              type="button"
+              onClick={() => setSidebarCollapsed(false)}
+              className="absolute top-1 left-2 z-20 inline-flex h-7 w-7 items-center justify-center rounded-md border border-border bg-card text-muted-foreground shadow-sm transition-colors hover:border-accent hover:text-accent"
+              aria-label="Show connections"
+              title="Show connections"
+            >
+              <SidebarExpandIcon />
+            </button>
+          )}
 
-        <div className="relative flex min-h-0 flex-1 flex-col">
-          {/*
+          <TabBar
+            tabs={tabs}
+            activeTabId={activeTabId}
+            onSelect={handleSelectTab}
+            onClose={handleCloseTab}
+            onNew={handleNewTab}
+            onReorder={reorderTabs}
+            onDropIntoEditor={mergeTabIntoEditor}
+          />
+
+          <div className="relative flex min-h-0 flex-1 flex-col">
+            {/*
             状態保持のため、接続が open な全てのタブを常時マウントし、
             アクティブでないタブは hidden で隠すだけにする。
             これで DatabaseBrowser の selectedDb や TableView の edit/filter、
             SqlEditor の実行結果などがタブ移動で飛ばなくなる。
           */}
-          {tabs.map((tab) => {
-            if (!activeIds.has(tab.connection.id)) return null;
-            const isActive = tab.id === activeTabId;
-            const visibilityClass = isActive ? "flex" : "hidden";
-            if (tab.kind === "connection") {
+            {tabs.map((tab) => {
+              if (!activeIds.has(tab.connection.id)) return null;
+              const isActive = tab.id === activeTabId;
+              const visibilityClass = isActive ? "flex" : "hidden";
+              if (tab.kind === "connection") {
+                return (
+                  <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                    <DatabaseBrowser
+                      connection={tab.connection}
+                      onOpenTable={handleOpenTableInTab}
+                      onNewQuery={openEditorTab}
+                      tabId={tab.id}
+                    />
+                  </div>
+                );
+              }
+              if (tab.kind === "table") {
+                return (
+                  <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                    <TableDetail
+                      connectionId={tab.connection.id}
+                      database={tab.database}
+                      table={tab.table}
+                      tabId={tab.id}
+                    />
+                  </div>
+                );
+              }
               return (
-                <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
-                  <DatabaseBrowser
+                <div
+                  key={tab.id}
+                  data-editor-drop-target={tab.id}
+                  className={`${visibilityClass} min-h-0 flex-1 flex-col`}
+                >
+                  <EditorPanes
+                    tabId={tab.id}
                     connection={tab.connection}
-                    onOpenTable={handleOpenTableInTab}
-                    onNewQuery={openEditorTab}
+                    panes={tab.panes}
+                    focusedPaneId={focusedPaneId}
+                    onFocusPane={setFocusedPaneId}
+                    onPaneSqlChange={(paneId, sql) => updatePaneSql(tab.id, paneId, sql)}
+                    onPaneDatabaseChange={(paneId, db) => updatePaneDatabase(tab.id, paneId, db)}
+                    onAddPane={() => addPane(tab.id)}
+                    onRemovePane={(paneId) => removePane(tab.id, paneId)}
+                    onOpenInNewEditor={(sql, db) => openEditorTab(tab.connection, db, sql)}
                   />
                 </div>
               );
-            }
-            if (tab.kind === "table") {
-              return (
-                <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
-                  <TableDetail
-                    connectionId={tab.connection.id}
-                    database={tab.database}
-                    table={tab.table}
-                  />
-                </div>
-              );
-            }
-            return (
-              <div
-                key={tab.id}
-                data-editor-drop-target={tab.id}
-                className={`${visibilityClass} min-h-0 flex-1 flex-col`}
-              >
-                <EditorPanes
-                  tabId={tab.id}
-                  connection={tab.connection}
-                  panes={tab.panes}
-                  focusedPaneId={focusedPaneId}
-                  onFocusPane={setFocusedPaneId}
-                  onPaneSqlChange={(paneId, sql) => updatePaneSql(tab.id, paneId, sql)}
-                  onPaneDatabaseChange={(paneId, db) => updatePaneDatabase(tab.id, paneId, db)}
-                  onAddPane={() => addPane(tab.id)}
-                  onRemovePane={(paneId) => removePane(tab.id, paneId)}
-                  onOpenInNewEditor={(sql, db) => openEditorTab(tab.connection, db, sql)}
+            })}
+
+            {showEmptyState && (
+              <div className="relative flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
+                {/* Atmospheric backdrop */}
+                <div
+                  aria-hidden
+                  className="pointer-events-none absolute inset-0 opacity-[0.35]"
+                  style={{
+                    backgroundImage:
+                      "linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)",
+                    backgroundSize: "32px 32px",
+                    maskImage:
+                      "radial-gradient(ellipse 80% 60% at 50% 35%, black 30%, transparent 75%)",
+                  }}
                 />
+                <div className="relative z-10 w-full max-w-3xl">
+                  <ConnectionForm
+                    initial={selected}
+                    onSaved={handleSaved}
+                    onOpened={handleOpened}
+                  />
+                </div>
               </div>
-            );
-          })}
-
-          {showEmptyState && (
-            <div className="relative flex flex-1 items-start justify-center overflow-y-auto px-10 py-10">
-              {/* Atmospheric backdrop */}
-              <div
-                aria-hidden
-                className="pointer-events-none absolute inset-0 opacity-[0.35]"
-                style={{
-                  backgroundImage:
-                    "linear-gradient(var(--border) 1px, transparent 1px), linear-gradient(90deg, var(--border) 1px, transparent 1px)",
-                  backgroundSize: "32px 32px",
-                  maskImage:
-                    "radial-gradient(ellipse 80% 60% at 50% 35%, black 30%, transparent 75%)",
-                }}
-              />
-              <div className="relative z-10 w-full max-w-3xl">
-                <ConnectionForm initial={selected} onSaved={handleSaved} onOpened={handleOpened} />
-              </div>
-            </div>
-          )}
-        </div>
-      </section>
-
-      {paletteOpen && activeTab && (
-        <TablePalette
-          connection={activeTab.connection}
-          onSelect={(database, table) => {
-            upsertTableTab(activeTab.connection, database, table);
-            setPaletteOpen(false);
-          }}
-          onClose={() => setPaletteOpen(false)}
-        />
-      )}
-
-      {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
-
-      {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
-
-      {toast && (
-        <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-md border border-accent/40 bg-card/90 px-4 py-2 shadow-[0_10px_30px_-10px_oklch(0_0_0/60%),0_0_0_1px_oklch(1_0_0/3%)_inset] backdrop-blur">
-          <div className="flex items-center gap-2.5 text-[0.82rem]">
-            <span
-              aria-hidden
-              className="inline-block h-2 w-2 rounded-full bg-accent shadow-[0_0_0_3px_var(--accent-glow),0_0_10px_2px_var(--accent-glow)]"
-            />
-            <span className="text-foreground">{toast}</span>
+            )}
           </div>
-        </div>
-      )}
-    </main>
+        </section>
+
+        {paletteOpen && activeTab && (
+          <TablePalette
+            connection={activeTab.connection}
+            onSelect={(database, table) => {
+              upsertTableTab(activeTab.connection, database, table);
+              setPaletteOpen(false);
+            }}
+            onClose={() => setPaletteOpen(false)}
+          />
+        )}
+
+        <CommandPalette
+          open={commandPaletteOpen}
+          onClose={() => setCommandPaletteOpen(false)}
+          connections={savedConnections}
+          activeIds={activeIds}
+          activeConnection={activeTab?.connection ?? null}
+          actions={[
+            {
+              id: "new-sql",
+              label: "New SQL Editor Tab",
+              hint: "⌘T",
+              run: () => {
+                if (activeTab) {
+                  const db =
+                    activeTab.kind === "table"
+                      ? activeTab.database
+                      : activeTab.kind === "editor"
+                        ? (activeTab.panes[0]?.database ?? null)
+                        : null;
+                  openEditorTab(activeTab.connection, db);
+                }
+              },
+            },
+            {
+              id: "new-connection",
+              label: "New Connection",
+              run: handleNewTab,
+            },
+            {
+              id: "close-tab",
+              label: "Close Active Tab",
+              hint: "⌘W",
+              run: () => {
+                if (activeTabId) handleCloseTab(activeTabId);
+              },
+            },
+            {
+              id: "open-settings",
+              label: "Open Settings",
+              hint: "⌘,",
+              run: () => setSettingsOpen(true),
+            },
+            {
+              id: "open-shortcuts",
+              label: "Show Keyboard Shortcuts",
+              hint: "⌘/",
+              run: () => setShortcutsOpen(true),
+            },
+            {
+              id: "toggle-theme",
+              label: "Toggle Theme (Dark / Light / System)",
+              run: () => {
+                const cur = settingsRef.current.theme;
+                const next = cur === "dark" ? "light" : cur === "light" ? "system" : "dark";
+                updateSettingRef.current("theme", next);
+              },
+            },
+            {
+              id: "toggle-sidebar",
+              label: "Toggle Connections Sidebar",
+              hint: "⌘S",
+              run: () => setSidebarCollapsed((v) => !v),
+            },
+          ]}
+          onSelectConnection={handleSelectConnection}
+          onOpenTable={upsertTableTab}
+        />
+
+        {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
+
+        {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
+
+        {toast && (
+          <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-md border border-accent/40 bg-card/90 px-4 py-2 shadow-[0_10px_30px_-10px_oklch(0_0_0/60%),0_0_0_1px_oklch(1_0_0/3%)_inset] backdrop-blur">
+            <div className="flex items-center gap-2.5 text-[0.82rem]">
+              <span
+                aria-hidden
+                className="inline-block h-2 w-2 rounded-full bg-accent shadow-[0_0_0_3px_var(--accent-glow),0_0_10px_2px_var(--accent-glow)]"
+              />
+              <span className="text-foreground">{toast}</span>
+            </div>
+          </div>
+        )}
+      </main>
+      <StatusBar
+        activeTab={activeTab ?? null}
+        connectionVersions={connectionVersions}
+        activeConnectionsCount={activeIds.size}
+        totalTabs={tabs.length}
+      />
+    </div>
   );
 }
 

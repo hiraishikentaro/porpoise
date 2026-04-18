@@ -6,6 +6,8 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useSettings } from "@/lib/settings";
 import { sqlLinter } from "@/lib/sql-lint";
@@ -39,6 +41,8 @@ type Props = {
   onSplit?: () => void;
   /** この pane を閉じる (複数 pane がある時のみ指定される) */
   onClose?: () => void;
+  /** Status bar へ実行情報を publish するコールバック */
+  onRunComplete?: (info: { rows: number; elapsedMs: number }) => void;
 };
 
 type RunTabResult =
@@ -221,7 +225,10 @@ export function SqlEditor({
   onOpenInNewEditor,
   onSplit,
   onClose,
+  onRunComplete,
 }: Props) {
+  const onRunCompleteRef = useRef(onRunComplete);
+  onRunCompleteRef.current = onRunComplete;
   const [sqlText, setSqlText] = useState(initialSql);
   const [database, setDatabase] = useState<string | null>(initialDatabase);
   const [databases, setDatabases] = useState<string[]>([]);
@@ -236,6 +243,20 @@ export function SqlEditor({
   sqlTextRef.current = sqlText;
   const databaseRef = useRef(database);
   databaseRef.current = database;
+
+  // runState が done になったら結果サマリを親に通知 (status bar 用)
+  useEffect(() => {
+    if (runState.kind !== "done") return;
+    let rows = 0;
+    let elapsedMs = 0;
+    for (const t of runState.tabs) {
+      if (t.kind === "ok") {
+        elapsedMs += t.result.elapsed_ms;
+        rows += t.result.kind === "select" ? t.result.returned : t.result.rows;
+      }
+    }
+    onRunCompleteRef.current?.({ rows, elapsedMs });
+  }, [runState]);
 
   useEffect(() => {
     let cancelled = false;
@@ -1271,8 +1292,23 @@ function ResultsPane({
 
   if (runState.kind === "idle") {
     return (
-      <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-        Ready. Press ⌘↵ to run.
+      <div className="flex flex-1 flex-col border-t border-border">
+        <EmptyState
+          variant="compact"
+          icon={
+            <svg viewBox="0 0 16 16" className="h-5 w-5" fill="none" role="img" aria-label="play">
+              <title>play</title>
+              <path
+                d="M5 3.5v9l7-4.5-7-4.5z"
+                stroke="currentColor"
+                strokeWidth="1.3"
+                strokeLinejoin="round"
+              />
+            </svg>
+          }
+          title="Run a query"
+          description="Press ⌘↵ to run the statement at cursor, or ⇧⌘↵ to run every statement in the editor."
+        />
       </div>
     );
   }
@@ -1280,8 +1316,19 @@ function ResultsPane({
     const suffix =
       runState.total && runState.total > 1 ? ` (${runState.index} / ${runState.total})` : "";
     return (
-      <div className="border-t border-border px-4 py-3 text-xs text-muted-foreground">
-        Running…{suffix}
+      <div className="flex flex-1 flex-col gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
+        <div className="flex items-center gap-2">
+          <span
+            aria-hidden
+            className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
+          />
+          Running{suffix}…
+        </div>
+        <div className="flex flex-col gap-1.5 pt-1">
+          <Skeleton className="h-2.5" style={{ width: "70%" }} />
+          <Skeleton className="h-2.5" style={{ width: "50%" }} />
+          <Skeleton className="h-2.5" style={{ width: "60%" }} />
+        </div>
       </div>
     );
   }

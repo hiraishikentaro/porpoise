@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { CsvImportModal } from "@/components/CsvImportModal";
 import { TableDetail } from "@/components/TableDetail";
+import { EmptyState } from "@/components/ui/empty-state";
 import { listDatabases, listTables, type SavedConnection, type TableInfo } from "@/lib/tauri";
 
 const WIDTHS_KEY = "porpoise.browser-widths.v1";
@@ -37,9 +38,11 @@ type Props = {
   onOpenTable: (connection: SavedConnection, database: string, table: string) => void;
   /** SQL クエリタブを新規で開く (現在選択中の DB をデフォルトに) */
   onNewQuery: (connection: SavedConnection, database: string | null) => void;
+  /** StatusBar publish 用の tab id (connection タブ id) */
+  tabId?: string;
 };
 
-export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) {
+export function DatabaseBrowser({ connection, onOpenTable, onNewQuery, tabId }: Props) {
   const [databases, setDatabases] = useState<string[]>([]);
   const [selectedDb, setSelectedDb] = useState<string | null>(null);
   const [tables, setTables] = useState<TableInfo[]>([]);
@@ -360,11 +363,36 @@ export function DatabaseBrowser({ connection, onOpenTable, onNewQuery }: Props) 
           connectionId={connection.id}
           database={selectedDb}
           table={selectedTable}
+          tabId={tabId}
         />
       ) : (
-        <div className="flex items-center justify-center p-10 text-xs text-muted-foreground">
-          {error ? null : "Select a table. Double-click to open in a new tab."}
-        </div>
+        !error && (
+          <EmptyState
+            icon={
+              <svg
+                viewBox="0 0 16 16"
+                className="h-5 w-5"
+                fill="none"
+                role="img"
+                aria-label="browse"
+              >
+                <title>browse</title>
+                <rect
+                  x="2"
+                  y="3"
+                  width="12"
+                  height="10"
+                  rx="1"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                />
+                <path d="M2 7h12M6 3v10" stroke="currentColor" strokeWidth="1.3" />
+              </svg>
+            }
+            title="Pick a table to browse"
+            description="Choose a database in the left column, then click a table. Double-click to open it in its own tab."
+          />
+        )
       )}
 
       {importTarget && (

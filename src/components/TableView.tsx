@@ -13,7 +13,10 @@ function isLongEditor(kind: EditorKind): boolean {
 }
 
 import { save } from "@tauri-apps/plugin-dialog";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
+import { useTabStatusPublish } from "@/lib/tab-status";
 import {
   type CellChange,
   type ColumnInfo,
@@ -42,6 +45,8 @@ type Props = {
   database: string;
   table: string;
   columns: ColumnInfo[];
+  /** Status bar へ rows/pending を publish するための tab id */
+  tabId?: string;
 };
 
 type Row = (string | null)[];
@@ -116,7 +121,8 @@ function filterDraftToFilter(d: FilterDraft): Filter | null {
   return { column: col, op: d.op, value: d.value };
 }
 
-export function TableView({ connectionId, database, table, columns }: Props) {
+export function TableView({ connectionId, database, table, columns, tabId }: Props) {
+  const publishStatus = useTabStatusPublish(tabId);
   const [state, setState] = useState<State>(initialState);
   const [edits, setEdits] = useState<EditMap>({});
   const [newRows, setNewRows] = useState<NewRow[]>([]);
@@ -298,6 +304,20 @@ export function TableView({ connectionId, database, table, columns }: Props) {
   }
 
   /**
+   * ロードが 180ms を超えるまで skeleton を出さない (チラツキ防止)。
+   * それ以内に完了すれば empty / rows へ直接遷移する。
+   */
+  const [showLoadingSkeleton, setShowLoadingSkeleton] = useState(false);
+  useEffect(() => {
+    if (!state.loading || state.rows.length > 0 || newRows.length > 0) {
+      setShowLoadingSkeleton(false);
+      return;
+    }
+    const handle = window.setTimeout(() => setShowLoadingSkeleton(true), 180);
+    return () => window.clearTimeout(handle);
+  }, [state.loading, state.rows.length, newRows.length]);
+
+  /**
    * Virtualized rendering は「新規行 + 既存行」のフラットリストで動かす。
    * virtual index < newRows.length なら新規行、以上なら既存行 (offset を引く)。
    */
@@ -419,6 +439,16 @@ export function TableView({ connectionId, database, table, columns }: Props) {
   const insertCount = newRows.length;
   const deleteCount = deletedRows.size;
   const totalChanges = effectiveEditCount + insertCount + deleteCount;
+
+  // Status bar へ行数 / pending 件数を publish
+  // biome-ignore lint/correctness/useExhaustiveDependencies: publishStatus は stable
+  useEffect(() => {
+    publishStatus({
+      rows: state.rows.length,
+      pending: totalChanges,
+      database,
+    });
+  }, [state.rows.length, totalChanges, database]);
 
   const pendingChanges: RowChange[] = useMemo(() => {
     const out: RowChange[] = [];
@@ -922,8 +952,38 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           </div>
         </div>
 
+        {showLoadingSkeleton && (
+          <div className="flex flex-col gap-0 px-0 py-0">
+            {Array.from({ length: 8 }, (_, i) => (
+              <div
+                // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton
+                key={`row-skel-${i}`}
+                className="flex h-7 items-center gap-6 border-b border-border/20 px-4"
+              >
+                {Array.from({ length: Math.max(3, Math.min(columns.length || 4, 6)) }).map(
+                  (_, j) => (
+                    <Skeleton
+                      // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton cells
+                      key={`cell-skel-${i}-${j}`}
+                      className="h-2.5"
+                      style={{ width: [80, 140, 100, 160, 70, 120][j % 6] }}
+                    />
+                  ),
+                )}
+              </div>
+            ))}
+          </div>
+        )}
         {!state.loading && state.rows.length === 0 && newRows.length === 0 && (
-          <p className="px-4 py-3 text-xs text-muted-foreground">No rows.</p>
+          <EmptyState
+            variant="compact"
+            title={appliedFilters.length > 0 ? "No rows match your filters" : "No rows"}
+            description={
+              appliedFilters.length > 0
+                ? "Try adjusting the filters or hit Unset to clear them."
+                : "This table has no rows yet. Use + Row to add one if the table is editable."
+            }
+          />
         )}
       </div>
 

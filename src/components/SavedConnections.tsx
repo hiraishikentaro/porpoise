@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
+import { EmptyState } from "@/components/ui/empty-state";
+import { Skeleton } from "@/components/ui/skeleton";
 import { colorForName, initialsOf, isLocalHost, statusColorVars } from "@/lib/status-color";
 import {
   closeConnection,
@@ -157,18 +159,58 @@ export function SavedConnections({
       )}
 
       <div className="flex-1 overflow-y-auto px-2 pb-3">
-        {loading && <p className="px-3 py-2 text-xs text-muted-foreground">Loading…</p>}
-        {!loading && filtered.length === 0 && (
-          <div className="px-3 py-6 text-center">
-            <p className="text-xs text-muted-foreground">
-              {items.length === 0 ? "No saved connections yet." : "No match."}
-            </p>
-            {items.length === 0 && (
-              <p className="mt-2 text-[0.65rem] text-muted-foreground/60">
-                Hit <span className="tp-kbd">+</span> above to add one.
-              </p>
-            )}
-          </div>
+        {loading && (
+          <ul className="flex flex-col gap-0.5 px-1 pt-1">
+            {Array.from({ length: 4 }, (_, i) => (
+              <li
+                // biome-ignore lint/suspicious/noArrayIndexKey: static skeleton list
+                key={`conn-skel-${i}`}
+                className="flex items-center gap-2 rounded-md px-2 py-1.5"
+              >
+                <Skeleton className="h-5 w-5 rounded-full" />
+                <div className="flex flex-1 flex-col gap-1">
+                  <Skeleton className="h-3" style={{ width: `${55 + i * 8}%` }} />
+                  <Skeleton className="h-2" style={{ width: `${30 + i * 4}%` }} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+        {!loading && filtered.length === 0 && items.length === 0 && (
+          <EmptyState
+            variant="compact"
+            icon={
+              <svg
+                viewBox="0 0 16 16"
+                className="h-5 w-5"
+                fill="none"
+                role="img"
+                aria-label="no connections"
+              >
+                <title>no connections</title>
+                <rect
+                  x="2.5"
+                  y="3"
+                  width="11"
+                  height="10"
+                  rx="1.4"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                />
+                <path
+                  d="M5 7h6M5 10h3"
+                  stroke="currentColor"
+                  strokeWidth="1.3"
+                  strokeLinecap="round"
+                />
+              </svg>
+            }
+            title="No connections yet"
+            description="Save your first MySQL connection to get started. Tap the + button above."
+          />
+        )}
+        {!loading && filtered.length === 0 && items.length > 0 && (
+          <p className="px-3 py-4 text-center text-xs text-muted-foreground">No match.</p>
         )}
         <ul className="flex flex-col gap-0.5">
           {filtered.map((conn) => {

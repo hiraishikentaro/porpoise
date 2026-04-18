@@ -7,6 +7,7 @@ const GROUPS: Group[] = [
   {
     title: "Global",
     items: [
+      { keys: ["⌘", "K"], desc: "Command palette (actions, connections, tables)" },
       { keys: ["⌘", ","], desc: "Open Settings" },
       { keys: ["⌘", "/"], desc: "Show this help" },
       { keys: ["⌘", "S"], desc: "Toggle connections sidebar" },

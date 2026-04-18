@@ -10,9 +10,17 @@ type Props = {
   table: string;
   /** 親側のタブヘッダを使う場合、内部の Data/Structure タブを省略できる */
   showTabs?: boolean;
+  /** StatusBar への publish 用。指定されなければ publish しない */
+  tabId?: string;
 };
 
-export function TableDetail({ connectionId, database, table, showTabs = true }: Props) {
+export function TableDetail({
+  connectionId,
+  database,
+  table,
+  showTabs = true,
+  tabId,
+}: Props) {
   const [tab, setTab] = useState<RightTab>("data");
   const [columns, setColumns] = useState<ColumnInfo[]>([]);
   const [loading, setLoading] = useState(false);
@@ -72,6 +80,7 @@ export function TableDetail({ connectionId, database, table, showTabs = true }: 
             database={database}
             table={table}
             columns={columns}
+            tabId={tabId}
           />
         ) : (
           <StructureTable loading={loading} columns={columns} />

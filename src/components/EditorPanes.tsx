@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { SqlEditor } from "@/components/SqlEditor";
 import type { EditorPane } from "@/components/TabBar";
+import { useTabStatusPublish } from "@/lib/tab-status";
 import type { SavedConnection } from "@/lib/tauri";
 
 type Props = {
@@ -38,6 +39,9 @@ export function EditorPanes({
   const [grows, setGrows] = useState<Record<string, number>>({});
   const containerRef = useRef<HTMLDivElement>(null);
   const growsRef = useRef(grows);
+
+  // 最後に実行した pane の結果サマリを status bar に流す
+  const publishStatus = useTabStatusPublish(tabId);
   growsRef.current = grows;
 
   const startResize = useCallback((e: React.PointerEvent, leftId: string, rightId: string) => {
@@ -114,6 +118,13 @@ export function EditorPanes({
             onOpenInNewEditor={onOpenInNewEditor}
             onSplit={onAddPane}
             onClose={panes.length > 1 ? () => onRemovePane(pane.id) : undefined}
+            onRunComplete={(info) =>
+              publishStatus({
+                rows: info.rows,
+                elapsedMs: info.elapsedMs,
+                database: pane.database,
+              })
+            }
           />
           {i < panes.length - 1 && (
             <button
