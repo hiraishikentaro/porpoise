@@ -1,6 +1,6 @@
 import { autocompletion } from "@codemirror/autocomplete";
 import { MySQL, sql as sqlLang } from "@codemirror/lang-sql";
-import { StateEffect, StateField } from "@codemirror/state";
+import { Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
@@ -395,36 +395,43 @@ export function SqlEditor({
       EditorView.lineWrapping,
       errorLineField,
       errorLineTheme,
-      keymap.of([
-        {
-          key: "Mod-Enter",
-          run: () => {
-            runAt();
-            return true;
+      // デフォルト keymap より先にマッチさせるため Prec.highest
+      Prec.highest(
+        keymap.of([
+          {
+            key: "Mod-Enter",
+            preventDefault: true,
+            run: () => {
+              runAt();
+              return true;
+            },
           },
-        },
-        {
-          key: "Shift-Mod-Enter",
-          run: () => {
-            runAll();
-            return true;
+          {
+            key: "Shift-Mod-Enter",
+            preventDefault: true,
+            run: () => {
+              runAll();
+              return true;
+            },
           },
-        },
-        {
-          key: "Alt-Enter",
-          run: () => {
-            explainAt();
-            return true;
+          {
+            key: "Alt-Enter",
+            preventDefault: true,
+            run: () => {
+              explainAt();
+              return true;
+            },
           },
-        },
-        {
-          key: "Shift-Mod-f",
-          run: () => {
-            formatDocument();
-            return true;
+          {
+            key: "Shift-Mod-f",
+            preventDefault: true,
+            run: () => {
+              formatDocument();
+              return true;
+            },
           },
-        },
-      ]),
+        ]),
+      ),
     ];
   }, [runAt, runAll, explainAt, schema, formatDocument]);
 
