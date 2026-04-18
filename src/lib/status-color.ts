@@ -7,14 +7,14 @@ export const STATUS_COLORS: StatusColor[] = ["gray", "blue", "amber", "green", "
  * contrasting foreground. Gradients read as "inked lozenge" rather than flat
  * circles, which is the one detail you notice at 20 px.
  */
-// Gruvbox の 6 色をそのまま avatar palette に割り当てる
+// Tokyo Night 由来の 6 色を avatar palette に割り当てる
 const palette: Record<StatusColor, { from: string; to: string; fg: string; ring: string }> = {
-  gray: { from: "#928374", to: "#665c54", fg: "#fbf1c7", ring: "#928374" },
-  blue: { from: "#83a598", to: "#458588", fg: "#282828", ring: "#458588" },
-  amber: { from: "#fabd2f", to: "#d79921", fg: "#282828", ring: "#d79921" },
-  green: { from: "#b8bb26", to: "#98971a", fg: "#282828", ring: "#98971a" },
-  red: { from: "#fb4934", to: "#cc241d", fg: "#fbf1c7", ring: "#cc241d" },
-  pink: { from: "#d3869b", to: "#b16286", fg: "#282828", ring: "#b16286" },
+  gray: { from: "#565f89", to: "#414868", fg: "#c0caf5", ring: "#565f89" },
+  blue: { from: "#7aa2f7", to: "#3d59a1", fg: "#1a1b26", ring: "#7aa2f7" },
+  amber: { from: "#e0af68", to: "#b08a46", fg: "#1a1b26", ring: "#e0af68" },
+  green: { from: "#9ece6a", to: "#73a252", fg: "#1a1b26", ring: "#9ece6a" },
+  red: { from: "#f7768e", to: "#c4556e", fg: "#1a1b26", ring: "#f7768e" },
+  pink: { from: "#bb9af7", to: "#9070c4", fg: "#1a1b26", ring: "#bb9af7" },
 };
 
 export function statusColorVars(color: StatusColor): React.CSSProperties {

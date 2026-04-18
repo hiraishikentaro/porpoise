@@ -146,6 +146,33 @@ function App() {
   const updateSettingRef = useRef(updateSetting);
   updateSettingRef.current = updateSetting;
 
+  // macOS WKWebView の autocorrect / autocapitalize / spellcheck を全 input で無効化。
+  // password 以外の全 input に属性を付与し、動的に追加された input も MutationObserver で拾う。
+  useEffect(() => {
+    function disarm(el: Element) {
+      if (!(el instanceof HTMLInputElement) && !(el instanceof HTMLTextAreaElement)) return;
+      if (el instanceof HTMLInputElement && el.type === "password") return;
+      if (el.dataset.acOff === "1") return;
+      el.dataset.acOff = "1";
+      if (!el.hasAttribute("autocomplete")) el.setAttribute("autocomplete", "off");
+      el.setAttribute("autocorrect", "off");
+      el.setAttribute("autocapitalize", "off");
+      el.setAttribute("spellcheck", "false");
+    }
+    document.querySelectorAll("input, textarea").forEach(disarm);
+    const observer = new MutationObserver((muts) => {
+      for (const m of muts) {
+        for (const n of m.addedNodes) {
+          if (!(n instanceof Element)) continue;
+          if (n.tagName === "INPUT" || n.tagName === "TEXTAREA") disarm(n);
+          n.querySelectorAll?.("input, textarea").forEach(disarm);
+        }
+      }
+    });
+    observer.observe(document.body, { subtree: true, childList: true });
+    return () => observer.disconnect();
+  }, []);
+
   useEffect(() => {
     (async () => {
       try {
@@ -301,6 +328,41 @@ function App() {
     },
     [],
   );
+
+  const mergeTabIntoEditor = useCallback((sourceTabId: string, targetTabId: string) => {
+    setTabs((prev) => {
+      const source = prev.find((t) => t.id === sourceTabId);
+      const target = prev.find((t) => t.id === targetTabId);
+      if (!source || !target || target.kind !== "editor") return prev;
+      // 異なる接続同士は merge しない (pane の connection は tab に紐づくため)
+      if (source.connection.id !== target.connection.id) return prev;
+
+      let incoming: { id: string; sql: string; database: string | null }[];
+      if (source.kind === "editor") {
+        incoming = source.panes;
+      } else if (source.kind === "table") {
+        incoming = [
+          {
+            id: newPaneId(),
+            sql: `SELECT * FROM \`${source.database}\`.\`${source.table}\` LIMIT 100;`,
+            database: source.database,
+          },
+        ];
+      } else {
+        // connection タブはドロップ不可
+        return prev;
+      }
+
+      return prev
+        .map((t) =>
+          t.id === targetTabId && t.kind === "editor"
+            ? { ...t, panes: [...t.panes, ...incoming] }
+            : t,
+        )
+        .filter((t) => t.id !== sourceTabId);
+    });
+    setActiveTabId(targetTabId);
+  }, []);
 
   const removeTab = useCallback(
     (id: string) => {
@@ -637,6 +699,7 @@ function App() {
           onClose={handleCloseTab}
           onNew={handleNewTab}
           onReorder={reorderTabs}
+          onDropIntoEditor={mergeTabIntoEditor}
         />
 
         <div className="relative flex min-h-0 flex-1 flex-col">
@@ -673,7 +736,11 @@ function App() {
               );
             }
             return (
-              <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+              <div
+                key={tab.id}
+                data-editor-drop-target={tab.id}
+                className={`${visibilityClass} min-h-0 flex-1 flex-col`}
+              >
                 <EditorPanes
                   tabId={tab.id}
                   connection={tab.connection}

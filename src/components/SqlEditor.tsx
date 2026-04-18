@@ -6,7 +6,9 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
+import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useSettings } from "@/lib/settings";
+import { sqlLinter } from "@/lib/sql-lint";
 import {
   clearQueryHistory,
   deleteSnippet,
@@ -204,8 +206,8 @@ const errorLineField = StateField.define<DecorationSet>({
 
 const errorLineTheme = EditorView.baseTheme({
   ".cm-porpoise-error-line": {
-    backgroundColor: "rgba(220, 38, 38, 0.18)",
-    textDecoration: "underline wavy rgba(220, 38, 38, 0.8)",
+    backgroundColor: "rgba(247, 118, 142, 0.18)",
+    textDecoration: "underline wavy rgba(247, 118, 142, 0.9)",
     textUnderlineOffset: "4px",
   },
 });
@@ -392,6 +394,7 @@ export function SqlEditor({
     return [
       sqlLang({ dialect: MySQL, schema: schemaConfig, upperCaseKeywords: true }),
       autocompletion(),
+      sqlLinter(),
       EditorView.lineWrapping,
       errorLineField,
       errorLineTheme,
@@ -1372,7 +1375,6 @@ function measureResultCols(
   });
 }
 
-type CopyFormat = "tsv" | "csv" | "json" | "sql";
 type SortState = { col: number; dir: "asc" | "desc" } | null;
 
 function SingleResultView({
@@ -1409,7 +1411,7 @@ function SingleResultView({
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.font =
-        '14px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
+        '14px "Inter Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui, sans-serif';
     }
     setColWidths(measureResultCols(ctx, tab.result.columns, tab.result.rows));
   }, [tab]);
@@ -1429,25 +1431,34 @@ function SingleResultView({
     };
   }, [ctxMenu]);
 
+  const colWidthsRef = useRef<number[]>(colWidths);
+  colWidthsRef.current = colWidths;
+
   const startColResize = useCallback((e: React.PointerEvent, colIdx: number) => {
     if (e.button !== 0) return;
     e.preventDefault();
     e.stopPropagation();
     const startX = e.clientX;
-    let startWidth = 0;
-    setColWidths((prev) => {
-      startWidth = prev[colIdx] ?? RES_COL_DEFAULT;
-      return prev;
-    });
+    const startWidth = colWidthsRef.current[colIdx] ?? RES_COL_DEFAULT;
     document.body.style.cursor = "col-resize";
     document.body.style.userSelect = "none";
-    function handleMove(ev: PointerEvent) {
-      const next = Math.max(RES_COL_MIN, Math.min(RES_COL_MAX, startWidth + (ev.clientX - startX)));
+    let rafId: number | null = null;
+    let pendingNext = startWidth;
+    function flush() {
+      rafId = null;
       setColWidths((prev) => {
+        if (prev[colIdx] === pendingNext) return prev;
         const out = prev.slice();
-        out[colIdx] = next;
+        out[colIdx] = pendingNext;
         return out;
       });
+    }
+    function handleMove(ev: PointerEvent) {
+      pendingNext = Math.max(
+        RES_COL_MIN,
+        Math.min(RES_COL_MAX, startWidth + (ev.clientX - startX)),
+      );
+      if (rafId === null) rafId = requestAnimationFrame(flush);
     }
     function handleUp() {
       window.removeEventListener("pointermove", handleMove);
@@ -1455,6 +1466,10 @@ function SingleResultView({
       window.removeEventListener("pointercancel", handleUp);
       document.body.style.cursor = "";
       document.body.style.userSelect = "";
+      if (rafId !== null) {
+        cancelAnimationFrame(rafId);
+        flush();
+      }
     }
     window.addEventListener("pointermove", handleMove);
     window.addEventListener("pointerup", handleUp);
@@ -1636,42 +1651,41 @@ function SingleResultView({
       </header>
       <div className="flex-1 overflow-auto">
         <table className="text-left text-sm" style={{ tableLayout: "fixed" }}>
-          <colgroup>
-            {r.columns.map((c, ci) => (
-              <col key={`col-${c}`} style={{ width: colWidths[ci] ?? RES_COL_DEFAULT }} />
-            ))}
-          </colgroup>
           <thead className="sticky top-0 bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur">
             <tr className="border-b border-border">
               {r.columns.map((c, ci) => {
                 const sorted = sort?.col === ci ? sort.dir : null;
+                const w = colWidths[ci] ?? RES_COL_DEFAULT;
                 return (
                   <th
                     key={c}
-                    className="relative overflow-hidden whitespace-nowrap border-r border-border/60 p-0"
+                    style={{ width: w, minWidth: w, maxWidth: w }}
+                    className="relative whitespace-nowrap p-0"
                   >
-                    <button
-                      type="button"
-                      onClick={() => cycleSort(ci)}
-                      className={`flex w-full items-center gap-1 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
-                        sorted ? "text-accent" : ""
-                      }`}
-                      title="Click to sort"
-                    >
-                      <span className="truncate">{c}</span>
-                      {sorted && (
-                        <span aria-hidden className="ml-auto text-[0.65rem]">
-                          {sorted === "desc" ? "▼" : "▲"}
-                        </span>
-                      )}
-                    </button>
-                    <button
-                      type="button"
-                      aria-label={`Resize ${c}`}
-                      onPointerDown={(e) => startColResize(e, ci)}
-                      className="absolute top-0 right-0 z-10 h-full w-1.5 translate-x-1/2 cursor-col-resize bg-transparent transition-colors hover:bg-accent/40 active:bg-accent/60"
-                      title="Drag to resize"
-                    />
+                    <div className="flex h-full w-full items-stretch">
+                      <button
+                        type="button"
+                        onClick={() => cycleSort(ci)}
+                        className={`flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
+                          sorted ? "text-accent" : ""
+                        }`}
+                        title="Click to sort"
+                      >
+                        <span className="truncate">{c}</span>
+                        {sorted && (
+                          <span aria-hidden className="ml-auto text-[0.65rem]">
+                            {sorted === "desc" ? "▼" : "▲"}
+                          </span>
+                        )}
+                      </button>
+                      <button
+                        type="button"
+                        aria-label={`Resize ${c}`}
+                        onPointerDown={(e) => startColResize(e, ci)}
+                        className="w-1.5 shrink-0 cursor-col-resize border-r border-border/60 bg-transparent transition-colors hover:bg-accent/50 active:bg-accent/70"
+                        title="Drag to resize"
+                      />
+                    </div>
                   </th>
                 );
               })}
@@ -1760,58 +1774,6 @@ function extractFromTable(sql: string): string {
   const m = sql.match(/\bFROM\s+`?([\w$]+)`?(?:\s*\.\s*`?([\w$]+)`?)?/i);
   if (!m) return "exported_rows";
   return m[2] ?? m[1] ?? "exported_rows";
-}
-
-function quoteIdent(name: string): string {
-  return `\`${name.replace(/`/g, "``")}\``;
-}
-
-function csvEscape(s: string): string {
-  if (!/[,"\n\r]/.test(s)) return s;
-  return `"${s.replace(/"/g, '""')}"`;
-}
-
-function sqlValue(v: string | null): string {
-  if (v === null) return "NULL";
-  const asNum = Number(v);
-  if (!Number.isNaN(asNum) && v.trim() !== "" && /^-?\d+(\.\d+)?$/.test(v)) return v;
-  return `'${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
-}
-
-function formatRowsAs(
-  rows: (string | null)[][],
-  cols: string[],
-  format: CopyFormat,
-  tableName: string,
-): string {
-  if (format === "tsv") {
-    const header = cols.join("\t");
-    const body = rows.map((r) => r.map((c) => c ?? "").join("\t")).join("\n");
-    return `${header}\n${body}`;
-  }
-  if (format === "csv") {
-    const header = cols.map(csvEscape).join(",");
-    const body = rows.map((r) => r.map((c) => csvEscape(c ?? "")).join(",")).join("\n");
-    return `${header}\n${body}`;
-  }
-  if (format === "json") {
-    const objs = rows.map((r) => {
-      const o: Record<string, string | null> = {};
-      cols.forEach((c, i) => {
-        o[c] = r[i] ?? null;
-      });
-      return o;
-    });
-    return JSON.stringify(objs, null, 2);
-  }
-  // sql
-  const colList = cols.map(quoteIdent).join(", ");
-  return rows
-    .map((r) => {
-      const vals = r.map(sqlValue).join(", ");
-      return `INSERT INTO ${quoteIdent(tableName)} (${colList}) VALUES (${vals});`;
-    })
-    .join("\n");
 }
 
 function QueryExportMenu({

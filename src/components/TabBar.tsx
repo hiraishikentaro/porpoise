@@ -40,6 +40,8 @@ type Props = {
   onNew: () => void;
   /** タブを draggingId の位置から targetId の位置 (before/after) に移動 */
   onReorder: (draggingId: string, targetId: string, position: "before" | "after") => void;
+  /** タブを editor タブの pane エリアにドロップした時のマージ依頼 */
+  onDropIntoEditor: (sourceTabId: string, targetEditorTabId: string) => void;
 };
 
 type DragState = {
@@ -51,7 +53,15 @@ type DragState = {
 /** 何px動いたら drag を開始するか。クリックと drag を分岐するための閾値 */
 const DRAG_THRESHOLD = 4;
 
-export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder }: Props) {
+export function TabBar({
+  tabs,
+  activeTabId,
+  onSelect,
+  onClose,
+  onNew,
+  onReorder,
+  onDropIntoEditor,
+}: Props) {
   const [drag, setDrag] = useState<DragState | null>(null);
   const tabRefs = useRef<Map<string, HTMLElement>>(new Map());
 
@@ -87,7 +97,12 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
       return { overId: null, position: null };
     }
 
+    let lastX = startX;
+    let lastY = e.clientY;
+
     function handleMove(ev: PointerEvent) {
+      lastX = ev.clientX;
+      lastY = ev.clientY;
       if (!started && Math.abs(ev.clientX - startX) >= DRAG_THRESHOLD) {
         started = true;
         current = { draggingId: id, overId: null, position: null };
@@ -103,13 +118,34 @@ export function TabBar({ tabs, activeTabId, onSelect, onClose, onNew, onReorder 
       }
     }
 
+    function findDropEditorTab(): string | null {
+      const els = document.elementsFromPoint(lastX, lastY);
+      for (const el of els) {
+        const target = (el as HTMLElement).closest?.(
+          "[data-editor-drop-target]",
+        ) as HTMLElement | null;
+        if (target) {
+          const tid = target.getAttribute("data-editor-drop-target");
+          if (tid && tid !== id) return tid;
+        }
+      }
+      return null;
+    }
+
     function handleUp() {
       window.removeEventListener("pointermove", handleMove);
       window.removeEventListener("pointerup", handleUp);
       window.removeEventListener("pointercancel", handleUp);
       if (started) {
+        // 優先順位:
+        //   1. 他タブの上 → reorder
+        //   2. editor タブの pane エリア → merge
+        //   3. どこでもない → noop
         if (current?.overId && current.position) {
           onReorder(current.draggingId, current.overId, current.position);
+        } else {
+          const dropTarget = findDropEditorTab();
+          if (dropTarget) onDropIntoEditor(id, dropTarget);
         }
       } else {
         // drag しなかったので通常の click と扱ってタブを選択

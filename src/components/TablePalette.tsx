@@ -112,6 +112,10 @@ export function TablePalette({ connection, onSelect, onClose }: Props) {
             }}
             onKeyDown={handleKeyDown}
             placeholder={`Search tables in ${connection.name}`}
+            autoComplete="off"
+            autoCorrect="off"
+            autoCapitalize="off"
+            spellCheck={false}
             className="h-7 flex-1 bg-transparent text-[0.82rem] outline-none placeholder:text-muted-foreground/60"
           />
           <span className="tp-num text-[0.62rem] text-muted-foreground/60">

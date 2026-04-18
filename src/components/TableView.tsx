@@ -13,6 +13,7 @@ function isLongEditor(kind: EditorKind): boolean {
 }
 
 import { save } from "@tauri-apps/plugin-dialog";
+import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import {
   type CellChange,
   type ColumnInfo,
@@ -84,7 +85,10 @@ function tempId(): string {
   return `new-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 7)}`;
 }
 
-type ContextTarget = { kind: "existing"; row: number } | { kind: "new"; tempId: string };
+type ContextTarget =
+  | { kind: "existing"; row: number; col?: number }
+  | { kind: "new"; tempId: string }
+  | { kind: "header"; col: number };
 
 type ContextMenu = {
   x: number;
@@ -99,6 +103,8 @@ type FilterDraft = {
   column: string;
   op: FilterOp;
   value: string;
+  /** Apply All の対象に含めるかのチェックボックス */
+  checked: boolean;
 };
 
 function filterDraftToFilter(d: FilterDraft): Filter | null {
@@ -120,12 +126,15 @@ export function TableView({ connectionId, database, table, columns }: Props) {
   const [committing, setCommitting] = useState(false);
   const [commitError, setCommitError] = useState<string | null>(null);
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
+  const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
+  const lastSelectedRef = useRef<number | null>(null);
+  const [copyToast, setCopyToast] = useState<string | null>(null);
   const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
   const [filterDrafts, setFilterDrafts] = useState<FilterDraft[]>([]);
-  const [filterMatchDraft, setFilterMatchDraft] = useState<FilterMatch>("all");
   const [filtersOpen, setFiltersOpen] = useState(false);
   const [appliedFilters, setAppliedFilters] = useState<Filter[]>([]);
-  const [appliedFilterMatch, setAppliedFilterMatch] = useState<FilterMatch>("all");
+  /** 現在適用されている filter draft の id 集合。UI の "Applied" 表示用 */
+  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
 
   // Click anywhere / Esc で閉じる
   useEffect(() => {
@@ -176,8 +185,6 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           {
             sort: sortKeys.length > 0 ? sortKeys : undefined,
             filters: appliedFilters.length > 0 ? appliedFilters : undefined,
-            filterMatch:
-              appliedFilters.length > 0 && appliedFilterMatch === "any" ? "any" : undefined,
           },
         );
         setState((s) => {
@@ -194,7 +201,7 @@ export function TableView({ connectionId, database, table, columns }: Props) {
         setState((s) => ({ ...s, loading: false, error: String(err) }));
       }
     },
-    [connectionId, database, table, sortKeys, appliedFilters, appliedFilterMatch],
+    [connectionId, database, table, sortKeys, appliedFilters],
   );
 
   useEffect(() => {
@@ -217,21 +224,77 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     });
   }
 
-  function applyFilters() {
+  /** チェックが入っている全 draft をまとめて適用 (AND) */
+  function applyAllChecked() {
     const valid: Filter[] = [];
+    const ids = new Set<string>();
     for (const d of filterDrafts) {
+      if (!d.checked) continue;
       const f = filterDraftToFilter(d);
-      if (f) valid.push(f);
+      if (f) {
+        valid.push(f);
+        ids.add(d.id);
+      }
     }
     setAppliedFilters(valid);
-    setAppliedFilterMatch(filterMatchDraft);
+    setAppliedIds(ids);
+  }
+
+  /** 単一 draft を適用 (既存 applied は全部置き換え) */
+  function applyOne(id: string) {
+    const d = filterDrafts.find((x) => x.id === id);
+    if (!d) return;
+    const f = filterDraftToFilter(d);
+    if (!f) return;
+    setAppliedFilters([f]);
+    setAppliedIds(new Set([id]));
   }
 
   function clearAllFilters() {
     setFilterDrafts([]);
     setAppliedFilters([]);
-    setFilterMatchDraft("all");
-    setAppliedFilterMatch("all");
+    setAppliedIds(new Set());
+  }
+
+  /** 右クリック由来の Quick filter。既存 drafts に追加して即座に適用 */
+  function applyQuickFilter(column: string, op: FilterOp, value: string) {
+    const draft: FilterDraft = {
+      id: `qf-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+      column,
+      op,
+      value,
+      checked: true,
+    };
+    const nextDrafts = [...filterDrafts, draft];
+    setFilterDrafts(nextDrafts);
+    setFiltersOpen(true);
+    const valid: Filter[] = [];
+    const ids = new Set<string>();
+    for (const d of nextDrafts) {
+      if (!d.checked) continue;
+      const f = filterDraftToFilter(d);
+      if (f) {
+        valid.push(f);
+        ids.add(d.id);
+      }
+    }
+    setAppliedFilters(valid);
+    setAppliedIds(ids);
+  }
+
+  /** 列ヘッダから新規 filter を開いて入力待ちにする (checked=true で追加) */
+  function openFilterForColumn(column: string) {
+    setFilterDrafts((prev) => [
+      ...prev,
+      {
+        id: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
+        column,
+        op: "like",
+        value: "",
+        checked: true,
+      },
+    ]);
+    setFiltersOpen(true);
   }
 
   /**
@@ -264,14 +327,17 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     const canvas = document.createElement("canvas");
     const ctx = canvas.getContext("2d");
     if (ctx) {
-      // TableView のセル文字と同じフォント指定
+      // TableView のセル文字と同じフォント指定 (index.css の --font-sans と揃える)
       ctx.font =
-        '14px -apple-system, BlinkMacSystemFont, "SF Pro Text", "Helvetica Neue", system-ui, sans-serif';
+        '14px "Inter Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui, sans-serif';
     }
     return ctx;
   }, []);
 
-  const colWidths = useMemo(() => {
+  /** ユーザーが pointer-drag でリサイズした列幅 (カラム名 → px)。計測値より優先される */
+  const [userColWidths, setUserColWidths] = useState<Record<string, number>>({});
+
+  const measuredColWidths = useMemo(() => {
     const measure = (s: string) => measureCtx?.measureText(s).width ?? s.length * 7.5;
     return state.columnNames.map((name, colIdx) => {
       let maxW = measure(name) + 40; // ヘッダは PK バッジの余白込み
@@ -286,7 +352,56 @@ export function TableView({ connectionId, database, table, columns }: Props) {
       return Math.max(MIN_COL_WIDTH, Math.min(MAX_COL_WIDTH, Math.ceil(maxW) + MEASURE_PADDING));
     });
   }, [state.columnNames, state.rows, measureCtx]);
+
+  const colWidths = useMemo(
+    () =>
+      state.columnNames.map(
+        (name, i) => userColWidths[name] ?? measuredColWidths[i] ?? MIN_COL_WIDTH,
+      ),
+    [state.columnNames, userColWidths, measuredColWidths],
+  );
   const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+
+  const startColResize = useCallback(
+    (e: React.PointerEvent, colName: string, startWidth: number) => {
+      if (e.button !== 0) return;
+      e.preventDefault();
+      e.stopPropagation();
+      const startX = e.clientX;
+      document.body.style.cursor = "col-resize";
+      document.body.style.userSelect = "none";
+      let rafId: number | null = null;
+      let pendingNext = startWidth;
+      function flush() {
+        rafId = null;
+        setUserColWidths((prev) =>
+          prev[colName] === pendingNext ? prev : { ...prev, [colName]: pendingNext },
+        );
+      }
+      function handleMove(ev: PointerEvent) {
+        pendingNext = Math.max(
+          MIN_COL_WIDTH,
+          Math.min(MAX_COL_WIDTH, startWidth + (ev.clientX - startX)),
+        );
+        if (rafId === null) rafId = requestAnimationFrame(flush);
+      }
+      function handleUp() {
+        window.removeEventListener("pointermove", handleMove);
+        window.removeEventListener("pointerup", handleUp);
+        window.removeEventListener("pointercancel", handleUp);
+        document.body.style.cursor = "";
+        document.body.style.userSelect = "";
+        if (rafId !== null) {
+          cancelAnimationFrame(rafId);
+          flush();
+        }
+      }
+      window.addEventListener("pointermove", handleMove);
+      window.addEventListener("pointerup", handleUp);
+      window.addEventListener("pointercancel", handleUp);
+    },
+    [],
+  );
 
   /**
    * 削除予定に含まれる行の UPDATE は無駄なので除外する。
@@ -406,6 +521,24 @@ export function TableView({ connectionId, database, table, columns }: Props) {
     });
   }
 
+  async function copyRowsAs(rowIdxs: number[], format: CopyFormat) {
+    if (rowIdxs.length === 0) return;
+    // cellValue で edits を反映した現在値をコピー対象にする
+    const sortedIdxs = [...rowIdxs].sort((a, b) => a - b);
+    const data = sortedIdxs.map((ri) => state.columnNames.map((_, ci) => cellValue(ri, ci)));
+    const text = formatRowsAs(data, state.columnNames, format, table);
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopyToast(
+        `Copied ${data.length} row${data.length > 1 ? "s" : ""} as ${format.toUpperCase()}`,
+      );
+      window.setTimeout(() => setCopyToast(null), 1600);
+    } catch {
+      setCopyToast("Copy failed");
+      window.setTimeout(() => setCopyToast(null), 1600);
+    }
+  }
+
   function cellValue(row: number, col: number): string | null {
     const key = editKey(row, col);
     if (key in edits) return edits[key];
@@ -498,7 +631,7 @@ export function TableView({ connectionId, database, table, columns }: Props) {
             table={table}
             sort={sortKeys}
             filters={appliedFilters}
-            filterMatch={appliedFilterMatch}
+            filterMatch="all"
           />
           {totalChanges > 0 && (
             <>
@@ -526,10 +659,15 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           columns={state.columnNames.length ? state.columnNames : columns.map((c) => c.name)}
           drafts={filterDrafts}
           setDrafts={setFilterDrafts}
-          match={filterMatchDraft}
-          setMatch={setFilterMatchDraft}
-          onApply={applyFilters}
-          onClearAll={clearAllFilters}
+          appliedIds={appliedIds}
+          onApplyAll={applyAllChecked}
+          onApplyOne={applyOne}
+          onUnset={() => {
+            clearAllFilters();
+            setFiltersOpen(false);
+          }}
+          tableName={table}
+          database={database}
           appliedCount={appliedFilters.length}
         />
       )}
@@ -553,39 +691,60 @@ export function TableView({ connectionId, database, table, columns }: Props) {
             {state.columnNames.map((col, i) => {
               const pk = columnIsPk(i);
               const sort = sortKeys.find((k) => k.column === col);
+              const width = colWidths[i];
               return (
-                <button
-                  type="button"
+                // biome-ignore lint/a11y/noStaticElementInteractions: header cell wrapper; contextmenu on div is required because button children can swallow the event
+                <div
                   key={col}
-                  style={{ width: colWidths[i] }}
-                  onClick={() => cycleSort(col)}
-                  className={`relative flex shrink-0 cursor-pointer items-center gap-1.5 border-r border-border/60 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
-                    sort ? "text-accent" : ""
-                  }`}
-                  title="Click to sort"
+                  style={{ width }}
+                  className="relative flex shrink-0 items-stretch"
+                  onContextMenu={(e) => {
+                    e.preventDefault();
+                    setContextMenu({
+                      x: e.clientX,
+                      y: e.clientY,
+                      target: { kind: "header", col: i },
+                    });
+                  }}
                 >
-                  {pk && (
-                    <span
-                      className="rounded-sm bg-accent/15 px-1 text-[0.55rem] font-semibold tracking-wider text-accent"
-                      style={{ fontFamily: "var(--font-mono)" }}
-                    >
-                      PK
-                    </span>
-                  )}
-                  <span className="truncate">{col}</span>
-                  {sort && (
-                    <span aria-hidden className="ml-auto text-[0.65rem] text-accent">
-                      {sort.descending ? "▼" : "▲"}
-                    </span>
-                  )}
-                  {sort && (
-                    <span
-                      aria-hidden
-                      className="absolute inset-x-0 bottom-0 h-[1.5px]"
-                      style={{ backgroundColor: "var(--accent)" }}
-                    />
-                  )}
-                </button>
+                  <button
+                    type="button"
+                    onClick={() => cycleSort(col)}
+                    className={`flex min-w-0 flex-1 cursor-pointer items-center gap-1.5 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
+                      sort ? "text-accent" : ""
+                    }`}
+                    title="Click to sort"
+                  >
+                    {pk && (
+                      <span
+                        className="rounded-sm bg-accent/15 px-1 text-[0.55rem] font-semibold tracking-wider text-accent"
+                        style={{ fontFamily: "var(--font-mono)" }}
+                      >
+                        PK
+                      </span>
+                    )}
+                    <span className="truncate">{col}</span>
+                    {sort && (
+                      <span aria-hidden className="ml-auto text-[0.65rem] text-accent">
+                        {sort.descending ? "▼" : "▲"}
+                      </span>
+                    )}
+                    {sort && (
+                      <span
+                        aria-hidden
+                        className="absolute inset-x-0 bottom-0 h-[1.5px]"
+                        style={{ backgroundColor: "var(--accent)" }}
+                      />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    aria-label={`Resize ${col}`}
+                    onPointerDown={(e) => startColResize(e, col, width)}
+                    className="w-1.5 shrink-0 cursor-col-resize border-r border-border/60 bg-transparent transition-colors hover:bg-accent/50 active:bg-accent/70"
+                    title="Drag to resize"
+                  />
+                </div>
               );
             })}
           </div>
@@ -623,23 +782,53 @@ export function TableView({ connectionId, database, table, columns }: Props) {
               const existingRowIdx = idx - newRows.length;
               const row = state.rows[existingRowIdx];
               const rowDeleted = deletedRows.has(existingRowIdx);
+              const isSelected = selectedRows.has(existingRowIdx);
               return (
                 // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
+                // biome-ignore lint/a11y/useKeyWithClickEvents: selection uses modifier+click; keyboard row-nav is future work
                 <div
                   key={virtualRow.key}
                   role="row"
                   tabIndex={-1}
                   className={`absolute top-0 left-0 flex border-b border-border/30 text-sm odd:bg-sidebar-accent/20 hover:bg-sidebar-accent/40 ${
                     rowDeleted ? "bg-destructive/15" : ""
-                  }`}
+                  } ${isSelected ? "bg-accent/20 hover:bg-accent/25" : ""}`}
                   style={{
                     width: totalWidth,
                     height: virtualRow.size,
                     transform: `translateY(${virtualRow.start}px)`,
                   }}
+                  onClick={(e) => {
+                    // セル編集中は選択処理をスキップ (ダブルクリック編集との整合性のため
+                    // プレーンクリックも吸って selection を更新する)
+                    if (e.metaKey || e.ctrlKey) {
+                      setSelectedRows((prev) => {
+                        const next = new Set(prev);
+                        if (next.has(existingRowIdx)) next.delete(existingRowIdx);
+                        else next.add(existingRowIdx);
+                        return next;
+                      });
+                      lastSelectedRef.current = existingRowIdx;
+                    } else if (e.shiftKey && lastSelectedRef.current !== null) {
+                      const from = Math.min(lastSelectedRef.current, existingRowIdx);
+                      const to = Math.max(lastSelectedRef.current, existingRowIdx);
+                      setSelectedRows((prev) => {
+                        const next = new Set(prev);
+                        for (let i = from; i <= to; i++) next.add(i);
+                        return next;
+                      });
+                    } else {
+                      setSelectedRows(new Set([existingRowIdx]));
+                      lastSelectedRef.current = existingRowIdx;
+                    }
+                  }}
                   onContextMenu={(e) => {
-                    if (!editable) return;
                     e.preventDefault();
+                    // 右クリックした行が選択済みでなければ単独選択に切り替え
+                    if (!selectedRows.has(existingRowIdx)) {
+                      setSelectedRows(new Set([existingRowIdx]));
+                      lastSelectedRef.current = existingRowIdx;
+                    }
                     setContextMenu({
                       x: e.clientX,
                       y: e.clientY,
@@ -682,6 +871,19 @@ export function TableView({ connectionId, database, table, columns }: Props) {
                             e.preventDefault();
                             setEditing({ kind: "existing", row: rowIdx, col: colIdx });
                           }
+                        }}
+                        onContextMenu={(e) => {
+                          e.preventDefault();
+                          e.stopPropagation();
+                          if (!selectedRows.has(existingRowIdx)) {
+                            setSelectedRows(new Set([existingRowIdx]));
+                            lastSelectedRef.current = existingRowIdx;
+                          }
+                          setContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            target: { kind: "existing", row: existingRowIdx, col: colIdx },
+                          });
                         }}
                         title={canEdit ? "double-click or Enter to edit" : undefined}
                       >
@@ -746,6 +948,10 @@ export function TableView({ connectionId, database, table, columns }: Props) {
           y={contextMenu.y}
           target={contextMenu.target}
           deletedRows={deletedRows}
+          selectedRows={selectedRows}
+          editable={editable}
+          columnNames={state.columnNames}
+          cellValue={cellValue}
           onDelete={(row) => {
             toggleDelete(row);
             setContextMenu(null);
@@ -754,8 +960,29 @@ export function TableView({ connectionId, database, table, columns }: Props) {
             removeNewRow(tempId);
             setContextMenu(null);
           }}
+          onCopy={(rows, format) => {
+            copyRowsAs(rows, format);
+            setContextMenu(null);
+          }}
+          onQuickFilter={(column, op, value) => {
+            applyQuickFilter(column, op, value);
+            setContextMenu(null);
+          }}
+          onFilterColumn={(column) => {
+            openFilterForColumn(column);
+            setContextMenu(null);
+          }}
           onClose={() => setContextMenu(null)}
         />
+      )}
+
+      {copyToast && (
+        <div
+          role="status"
+          className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md border border-border bg-popover px-3 py-1.5 text-xs text-foreground shadow-lg"
+        >
+          {copyToast}
+        </div>
       )}
 
       {(() => {
@@ -808,25 +1035,58 @@ const FILTER_OPS: { value: FilterOp; label: string; hasValue: boolean }[] = [
   { value: "is_not_null", label: "IS NOT NULL", hasValue: false },
 ];
 
+function buildWhereSql(drafts: FilterDraft[], database: string, table: string): string {
+  const valid = drafts.map(filterDraftToFilter).filter((f): f is Filter => f !== null);
+  const ident = (s: string) => `\`${s.replace(/`/g, "``")}\``;
+  const quote = (v: string) => `'${v.replace(/\\/g, "\\\\").replace(/'/g, "\\'")}'`;
+  const opLabel: Record<Filter["op"], string> = {
+    eq: "=",
+    ne: "<>",
+    lt: "<",
+    le: "<=",
+    gt: ">",
+    ge: ">=",
+    like: "LIKE",
+    not_like: "NOT LIKE",
+    is_null: "IS NULL",
+    is_not_null: "IS NOT NULL",
+  };
+  const parts = valid.map((f) => {
+    const left = ident(f.column);
+    if (f.op === "is_null" || f.op === "is_not_null") {
+      return `${left} ${opLabel[f.op]}`;
+    }
+    const value = (f as { value: string }).value;
+    return `${left} ${opLabel[f.op]} ${quote(value)}`;
+  });
+  const where = parts.length === 0 ? "" : `\nWHERE ${parts.join("\n  AND ")}`;
+  return `SELECT *\nFROM ${ident(database)}.${ident(table)}${where};`;
+}
+
 function FilterBar({
   columns,
   drafts,
   setDrafts,
-  match,
-  setMatch,
-  onApply,
-  onClearAll,
+  appliedIds,
+  onApplyAll,
+  onApplyOne,
+  onUnset,
+  tableName,
+  database,
   appliedCount,
 }: {
   columns: string[];
   drafts: FilterDraft[];
   setDrafts: React.Dispatch<React.SetStateAction<FilterDraft[]>>;
-  match: FilterMatch;
-  setMatch: (m: FilterMatch) => void;
-  onApply: () => void;
-  onClearAll: () => void;
+  appliedIds: Set<string>;
+  onApplyAll: () => void;
+  onApplyOne: (id: string) => void;
+  onUnset: () => void;
+  tableName: string;
+  database: string;
   appliedCount: number;
 }) {
+  const [sqlOpen, setSqlOpen] = useState(false);
   function updateDraft(id: string, patch: Partial<FilterDraft>) {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   }
@@ -838,6 +1098,7 @@ function FilterBar({
         column: columns[0] ?? "",
         op: "like",
         value: "",
+        checked: true,
       },
     ]);
   }
@@ -859,38 +1120,22 @@ function FilterBar({
         </div>
       ) : (
         <>
-          <div className="flex items-center gap-2">
-            <span className="text-muted-foreground">Match</span>
-            <div className="inline-flex overflow-hidden rounded-md border border-border">
-              <button
-                type="button"
-                onClick={() => setMatch("all")}
-                className={`px-2 py-0.5 text-xs ${
-                  match === "all"
-                    ? "bg-foreground text-background"
-                    : "bg-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                ALL (AND)
-              </button>
-              <button
-                type="button"
-                onClick={() => setMatch("any")}
-                className={`px-2 py-0.5 text-xs ${
-                  match === "any"
-                    ? "bg-foreground text-background"
-                    : "bg-transparent text-muted-foreground hover:text-foreground"
-                }`}
-              >
-                ANY (OR)
-              </button>
-            </div>
-          </div>
           <ul className="flex flex-col gap-1">
             {drafts.map((d) => {
               const op = FILTER_OPS.find((o) => o.value === d.op) ?? FILTER_OPS[0];
+              const isApplied = appliedIds.has(d.id);
               return (
-                <li key={d.id} className="grid grid-cols-[200px_140px_1fr_auto] items-center gap-2">
+                <li
+                  key={d.id}
+                  className="grid grid-cols-[auto_200px_140px_1fr_auto_auto] items-center gap-2"
+                >
+                  <input
+                    type="checkbox"
+                    checked={d.checked}
+                    onChange={(e) => updateDraft(d.id, { checked: e.currentTarget.checked })}
+                    aria-label="Include in Apply All"
+                    className="h-3.5 w-3.5 cursor-pointer accent-accent"
+                  />
                   <select
                     value={d.column}
                     onChange={(e) => updateDraft(d.id, { column: e.currentTarget.value })}
@@ -921,11 +1166,23 @@ function FilterBar({
                     onKeyDown={(e) => {
                       if (e.key === "Enter") {
                         e.preventDefault();
-                        onApply();
+                        onApplyOne(d.id);
                       }
                     }}
                     className="h-7 rounded-md border border-border bg-input/50 px-2 outline-none placeholder:text-muted-foreground/60 focus:border-accent disabled:opacity-50"
                   />
+                  <button
+                    type="button"
+                    onClick={() => onApplyOne(d.id)}
+                    className={`rounded-md border px-2 py-0.5 font-semibold ${
+                      isApplied
+                        ? "border-accent bg-accent/20 text-accent"
+                        : "border-border text-muted-foreground hover:border-accent hover:text-accent"
+                    }`}
+                    title="Apply only this filter (↵)"
+                  >
+                    {isApplied ? "Applied" : "Apply"}
+                  </button>
                   <button
                     type="button"
                     onClick={() => removeDraft(d.id)}
@@ -943,29 +1200,106 @@ function FilterBar({
               type="button"
               onClick={addDraft}
               className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:border-accent hover:text-accent"
+              title="Add filter"
             >
               + Filter
             </button>
             <button
               type="button"
-              onClick={onClearAll}
-              className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:text-destructive"
+              onClick={() => setSqlOpen(true)}
+              className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:border-accent hover:text-accent"
+              title="Preview generated SQL"
             >
-              Clear
+              SQL
+            </button>
+            <button
+              type="button"
+              onClick={onUnset}
+              className="rounded-md border border-border px-2 py-0.5 text-muted-foreground hover:text-destructive"
+              title="Clear all filters and close filter bar"
+            >
+              Unset
             </button>
             <span className="ml-auto text-muted-foreground">
               {appliedCount > 0 ? `${appliedCount} applied` : "unapplied"}
             </span>
             <button
               type="button"
-              onClick={onApply}
+              onClick={onApplyAll}
               className="rounded-md border border-accent bg-accent px-2 py-0.5 font-semibold text-accent-foreground hover:opacity-90"
+              title="Apply all checked filters (⌘↵)"
             >
-              Apply
+              Apply All
             </button>
           </div>
         </>
       )}
+      {sqlOpen && (
+        <SqlPreviewModal
+          sql={buildWhereSql(drafts, database, tableName)}
+          onClose={() => setSqlOpen(false)}
+        />
+      )}
+    </div>
+  );
+}
+
+function SqlPreviewModal({ sql, onClose }: { sql: string; onClose: () => void }) {
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      if (e.key === "Escape") onClose();
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
+
+  async function copy() {
+    try {
+      await navigator.clipboard.writeText(sql);
+    } catch {
+      // noop
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-start justify-center bg-black/50 px-6 pt-[12vh] backdrop-blur-sm">
+      <button
+        type="button"
+        aria-label="Close"
+        className="absolute inset-0 z-0 cursor-default"
+        onClick={onClose}
+      />
+      <div
+        role="dialog"
+        aria-label="Generated SQL"
+        className="relative z-10 flex w-full max-w-2xl flex-col overflow-hidden rounded-lg border border-border bg-card shadow-xl"
+      >
+        <header className="flex items-center justify-between border-b border-border bg-sidebar/30 px-4 py-2">
+          <span className="font-mono text-[0.65rem] uppercase tracking-[0.14em] text-muted-foreground">
+            Generated SQL
+          </span>
+          <div className="flex items-center gap-2">
+            <button
+              type="button"
+              onClick={copy}
+              className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
+            >
+              Copy
+            </button>
+            <button
+              type="button"
+              onClick={onClose}
+              className="text-muted-foreground hover:text-foreground"
+              aria-label="Close"
+            >
+              ✕
+            </button>
+          </div>
+        </header>
+        <pre className="overflow-auto whitespace-pre px-4 py-3 font-mono text-[0.78rem] leading-relaxed text-foreground">
+          {sql}
+        </pre>
+      </div>
     </div>
   );
 }
@@ -975,24 +1309,51 @@ function RowContextMenu({
   y,
   target,
   deletedRows,
+  selectedRows,
+  editable,
+  columnNames,
+  cellValue,
   onDelete,
   onDiscardNew,
+  onCopy,
+  onQuickFilter,
+  onFilterColumn,
 }: {
   x: number;
   y: number;
   target: ContextTarget;
   deletedRows: Set<number>;
+  selectedRows: Set<number>;
+  editable: boolean;
+  columnNames: string[];
+  cellValue: (row: number, col: number) => string | null;
   onDelete: (row: number) => void;
   onDiscardNew: (tempId: string) => void;
+  onCopy: (rows: number[], format: CopyFormat) => void;
+  onQuickFilter: (column: string, op: FilterOp, value: string) => void;
+  onFilterColumn: (column: string) => void;
   onClose: () => void;
 }) {
-  // 画面端でクリップされないよう位置をオフセット
   const style: React.CSSProperties = {
     position: "fixed",
     top: y,
     left: x,
-    minWidth: 180,
+    minWidth: 220,
   };
+
+  const copyTargets: number[] =
+    target.kind === "existing"
+      ? selectedRows.has(target.row)
+        ? Array.from(selectedRows)
+        : [target.row]
+      : [];
+  const copyLabel = `Copy ${copyTargets.length > 1 ? `${copyTargets.length} rows` : "row"} as`;
+
+  // セル右クリック時は value 基準で Quick filter を出す
+  const cellCol = target.kind === "existing" && typeof target.col === "number" ? target.col : null;
+  const cellColumn = cellCol !== null ? columnNames[cellCol] : null;
+  const cellVal =
+    target.kind === "existing" && cellCol !== null ? cellValue(target.row, cellCol) : null;
 
   return (
     <div
@@ -1002,23 +1363,107 @@ function RowContextMenu({
       style={style}
       className="z-40 rounded-md border border-border bg-popover p-1 text-sm shadow-xl"
     >
-      {target.kind === "existing" ? (
-        <button
-          type="button"
-          role="menuitem"
-          onClick={() => onDelete(target.row)}
-          className={`flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left ${
-            deletedRows.has(target.row)
-              ? "text-muted-foreground hover:bg-muted"
-              : "text-destructive hover:bg-destructive/15"
-          }`}
-        >
-          <span className="font-medium">
-            {deletedRows.has(target.row) ? "Undo delete" : "Delete row"}
-          </span>
-          <span className="ml-auto text-xs text-muted-foreground">row #{target.row}</span>
-        </button>
-      ) : (
+      {target.kind === "header" && (
+        <>
+          <div className="px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            Column · {columnNames[target.col] ?? ""}
+          </div>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => {
+              const col = columnNames[target.col];
+              if (col) onFilterColumn(col);
+            }}
+            className="flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left hover:bg-sidebar-accent/40"
+          >
+            Filter with this column…
+          </button>
+        </>
+      )}
+      {target.kind === "existing" && cellColumn && (
+        <>
+          <div className="px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            Quick filter · {cellColumn}
+          </div>
+          {cellVal === null ? (
+            <>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => onQuickFilter(cellColumn, "is_null", "")}
+                className="flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left hover:bg-sidebar-accent/40"
+              >
+                IS NULL
+              </button>
+              <button
+                type="button"
+                role="menuitem"
+                onClick={() => onQuickFilter(cellColumn, "is_not_null", "")}
+                className="flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left hover:bg-sidebar-accent/40"
+              >
+                IS NOT NULL
+              </button>
+            </>
+          ) : (
+            <>
+              <QuickFilterButton
+                label={"= "}
+                value={cellVal}
+                onClick={() => onQuickFilter(cellColumn, "eq", cellVal)}
+              />
+              <QuickFilterButton
+                label={"≠ "}
+                value={cellVal}
+                onClick={() => onQuickFilter(cellColumn, "ne", cellVal)}
+              />
+              <QuickFilterButton
+                label="LIKE %…% "
+                value={cellVal}
+                onClick={() => onQuickFilter(cellColumn, "like", `%${cellVal}%`)}
+              />
+            </>
+          )}
+          <div className="my-1 h-px bg-border/50" />
+        </>
+      )}
+      {target.kind === "existing" && (
+        <>
+          <div className="px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-wider text-muted-foreground">
+            {copyLabel}
+          </div>
+          {(["tsv", "csv", "json", "sql"] as const).map((fmt) => (
+            <button
+              key={fmt}
+              type="button"
+              role="menuitem"
+              onClick={() => onCopy(copyTargets, fmt)}
+              className="flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left hover:bg-sidebar-accent/40"
+            >
+              <span>{fmt === "sql" ? "SQL INSERT" : fmt.toUpperCase()}</span>
+            </button>
+          ))}
+          {editable && <div className="my-1 h-px bg-border/50" />}
+          {editable && (
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => onDelete(target.row)}
+              className={`flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left ${
+                deletedRows.has(target.row)
+                  ? "text-muted-foreground hover:bg-muted"
+                  : "text-destructive hover:bg-destructive/15"
+              }`}
+            >
+              <span className="font-medium">
+                {deletedRows.has(target.row) ? "Undo delete" : "Delete row"}
+              </span>
+              <span className="ml-auto text-xs text-muted-foreground">row #{target.row}</span>
+            </button>
+          )}
+        </>
+      )}
+      {target.kind === "new" && (
         <button
           type="button"
           role="menuitem"
@@ -1029,6 +1474,29 @@ function RowContextMenu({
         </button>
       )}
     </div>
+  );
+}
+
+function QuickFilterButton({
+  label,
+  value,
+  onClick,
+}: {
+  label: string;
+  value: string;
+  onClick: () => void;
+}) {
+  const preview = value.length > 24 ? `${value.slice(0, 24)}…` : value;
+  return (
+    <button
+      type="button"
+      role="menuitem"
+      onClick={onClick}
+      className="flex w-full items-center gap-1 rounded-sm px-3 py-1.5 text-left hover:bg-sidebar-accent/40"
+    >
+      <span className="font-mono text-muted-foreground">{label}</span>
+      <span className="truncate">{preview}</span>
+    </button>
   );
 }
 
