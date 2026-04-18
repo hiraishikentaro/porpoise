@@ -440,7 +440,7 @@ pub async fn execute_query(
             row_count,
             error_msg.as_deref(),
         ) {
-            tracing::warn!(error = %e, "failed to record query history");
+            tracing::warn!("failed to record query history: {e}");
         }
     }
 
@@ -455,7 +455,7 @@ fn history_enabled(state: &State<'_, AppState>, id: Uuid) -> bool {
         // 接続メタが見つからない場合は保守的に記録しておく (後で消せる)
         Ok(None) => true,
         Err(e) => {
-            tracing::warn!(error = %e, "history_enabled lookup failed; recording anyway");
+            tracing::warn!("history_enabled lookup failed; recording anyway: {e}");
             true
         }
     }

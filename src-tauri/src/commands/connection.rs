@@ -20,7 +20,7 @@ pub async fn test_connection(config: ConnectionConfig) -> AppResult<String> {
             Ok(version)
         }
         Err(e) => {
-            tracing::warn!(error = %e, host = %config.host, "test_connection failed");
+            tracing::warn!(host = %config.host, "test_connection failed: {e}");
             Err(e)
         }
     }
@@ -269,14 +269,14 @@ pub async fn open_connection(
     let opened = match mysql_client::open(&config).await {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(%id, error = %e, "open_connection: pool creation failed");
+            tracing::warn!(%id, "open_connection: pool creation failed: {e}");
             return Err(e);
         }
     };
     let version = match mysql_client::fetch_version(&opened.pool).await {
         Ok(v) => v,
         Err(e) => {
-            tracing::warn!(%id, error = %e, "open_connection: VERSION() failed");
+            tracing::warn!(%id, "open_connection: VERSION() failed: {e}");
             opened.pool.disconnect().await.ok();
             if let Some(t) = opened.tunnel {
                 t.shutdown().await;
