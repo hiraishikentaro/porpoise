@@ -267,12 +267,19 @@ export function executeQuery(
   connectionId: string,
   sql: string,
   database?: string | null,
+  requestId?: string | null,
 ): Promise<QueryResult> {
   return invoke<QueryResult>("execute_query", {
     connectionId,
     sql,
     database: database ?? null,
+    requestId: requestId ?? null,
   });
+}
+
+/** 実行中クエリを KILL QUERY で中断する。killed=true が返れば成功 */
+export function cancelQuery(requestId: string): Promise<boolean> {
+  return invoke<boolean>("cancel_query", { requestId });
 }
 
 export type SchemaSnapshot = {

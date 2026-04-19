@@ -5,7 +5,7 @@ use tauri::State;
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
-use crate::state::AppState;
+use crate::state::{AppState, RunningQuery};
 
 /// MySQL の管理系スキーマ。一覧から除外する。
 const SYSTEM_SCHEMAS: &[&str] = &["information_schema", "performance_schema", "mysql", "sys"];
@@ -417,11 +417,21 @@ pub async fn execute_query(
     connection_id: Uuid,
     sql: String,
     database: Option<String>,
+    request_id: Option<Uuid>,
 ) -> AppResult<QueryResult> {
     let pool = pool_of(&state, connection_id)?;
 
     let start = std::time::Instant::now();
-    let outcome = execute_query_inner(&pool, &sql, database.as_deref(), start).await;
+    let outcome = run_with_registration(
+        &state,
+        &pool,
+        &sql,
+        database.as_deref(),
+        start,
+        connection_id,
+        request_id,
+    )
+    .await;
     let elapsed_ms = start.elapsed().as_millis() as u64;
 
     // プライバシー設定: 接続ごとに history_enabled=false の場合は記録しない
@@ -461,14 +471,53 @@ fn history_enabled(state: &State<'_, AppState>, id: Uuid) -> bool {
     }
 }
 
-async fn execute_query_inner(
+/// 取得直後の conn 上で mysql thread id を拾って running_queries に登録 → 実行 → 登録解除。
+/// cancel_query からは別 conn で `KILL QUERY {thread_id}` を撃つ。
+async fn run_with_registration(
+    state: &State<'_, AppState>,
     pool: &Pool,
     sql: &str,
     database: Option<&str>,
     start: std::time::Instant,
+    connection_id: Uuid,
+    request_id: Option<Uuid>,
 ) -> AppResult<QueryResult> {
     let mut conn = pool.get_conn().await?;
+    if let Some(rid) = request_id {
+        let thread_id = conn.id();
+        let mut running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
+        running.insert(
+            rid,
+            RunningQuery {
+                connection_id,
+                mysql_thread_id: thread_id,
+            },
+        );
+    }
 
+    let outcome = run_on_conn(&mut conn, sql, database, start).await;
+
+    if let Some(rid) = request_id {
+        let mut running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
+        running.remove(&rid);
+    }
+    conn.disconnect().await.ok();
+
+    outcome
+}
+
+async fn run_on_conn(
+    conn: &mut mysql_async::Conn,
+    sql: &str,
+    database: Option<&str>,
+    start: std::time::Instant,
+) -> AppResult<QueryResult> {
     // 明示的な DB 指定があれば USE で切り替える。失敗したらそのままエラーを返す。
     if let Some(db) = database.map(str::trim).filter(|s| !s.is_empty()) {
         let use_sql = format!("USE {}", quote_ident(db));
@@ -486,7 +535,6 @@ async fn execute_query_inner(
     let rows: Vec<Row> = result.collect_and_drop().await?;
     let affected = conn.affected_rows();
     let elapsed_ms = start.elapsed().as_millis() as u64;
-    conn.disconnect().await.ok();
 
     if has_columns {
         let returned = rows.len() as u64;
@@ -507,6 +555,42 @@ async fn execute_query_inner(
             rows: affected,
             elapsed_ms,
         })
+    }
+}
+
+/// 実行中クエリを `KILL QUERY {thread_id}` で中断。
+/// 成功/空/エラーを問わず副 conn は解放する。成功すれば実行側の query_iter は中断エラーで戻る。
+#[tauri::command]
+pub async fn cancel_query(state: State<'_, AppState>, request_id: Uuid) -> AppResult<bool> {
+    let handle = {
+        let running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
+        running.get(&request_id).copied()
+    };
+    let Some(handle) = handle else {
+        return Ok(false);
+    };
+    let pool = pool_of(&state, handle.connection_id)?;
+    let mut conn = pool.get_conn().await?;
+    let kill_sql = format!("KILL QUERY {}", handle.mysql_thread_id);
+    let res = conn.query_drop(kill_sql).await;
+    conn.disconnect().await.ok();
+    match res {
+        Ok(()) => {
+            tracing::info!(
+                ?request_id,
+                thread_id = handle.mysql_thread_id,
+                "cancel_query: killed"
+            );
+            Ok(true)
+        }
+        Err(e) => {
+            // 既に終わっている等はエラーになるが fatal ではない
+            tracing::warn!(?request_id, "cancel_query: KILL failed: {e}");
+            Ok(false)
+        }
     }
 }
 
