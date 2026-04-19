@@ -14,6 +14,7 @@ function isLongEditor(kind: EditorKind): boolean {
 
 import { save } from "@tauri-apps/plugin-dialog";
 import { EmptyState } from "@/components/ui/empty-state";
+import { KbdHint } from "@/components/ui/kbd-hint";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
@@ -1288,10 +1289,11 @@ function FilterBar({
             <button
               type="button"
               onClick={onApplyAll}
-              className="rounded-md border border-accent bg-accent px-2 py-0.5 font-semibold text-accent-foreground hover:opacity-90"
-              title="Apply all checked filters (⌘↵)"
+              className="group relative rounded-md border border-accent bg-accent px-2 py-0.5 font-semibold text-accent-foreground hover:opacity-90"
+              title="Apply all checked filters"
             >
               Apply All
+              <KbdHint keys={["⌘", "↵"]} placement="top" />
             </button>
           </div>
         </>

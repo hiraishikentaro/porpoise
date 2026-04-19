@@ -10,6 +10,7 @@ import { ShortcutsModal } from "@/components/ShortcutsModal";
 import { StatusBar } from "@/components/StatusBar";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
+import { KbdHint } from "@/components/ui/kbd-hint";
 import { useT } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import {
@@ -678,20 +679,22 @@ function App() {
                 <button
                   type="button"
                   onClick={() => setSettingsOpen(true)}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  className="group relative inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
                   aria-label="Settings"
                   title="Settings"
                 >
                   <GearIcon />
+                  <KbdHint keys={["⌘", ","]} />
                 </button>
                 <button
                   type="button"
                   onClick={() => setSidebarCollapsed(true)}
-                  className="inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
+                  className="group relative inline-flex h-7 w-7 items-center justify-center rounded-md text-sidebar-foreground/60 transition-colors hover:bg-sidebar-accent hover:text-sidebar-foreground"
                   aria-label="Collapse sidebar"
                   title="Hide connections"
                 >
                   <SidebarCollapseIcon />
+                  <KbdHint keys={["⌘", "S"]} />
                 </button>
               </div>
             </header>
