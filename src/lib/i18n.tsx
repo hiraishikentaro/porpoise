@@ -128,6 +128,8 @@ type Messages = {
   "editor.running": string;
   "editor.closePane": string;
   "editor.split": string;
+  "editor.cancel": string;
+  "editor.cancelled": string;
 
   // Connection form
   "conn.save": string;
@@ -264,6 +266,8 @@ const EN: Messages = {
   "editor.running": "Running",
   "editor.closePane": "Close pane",
   "editor.split": "Split",
+  "editor.cancel": "Cancel",
+  "editor.cancelled": "Query cancelled",
 
   "conn.save": "Save",
   "conn.saveAndOpen": "Save & Open",
@@ -398,6 +402,8 @@ const JA: Messages = {
   "editor.running": "実行中",
   "editor.closePane": "ペインを閉じる",
   "editor.split": "分割",
+  "editor.cancel": "キャンセル",
+  "editor.cancelled": "クエリをキャンセルしました",
 
   "conn.save": "保存",
   "conn.saveAndOpen": "保存して開く",

@@ -13,6 +13,7 @@ import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useSettings } from "@/lib/settings";
 import { sqlLinter } from "@/lib/sql-lint";
 import {
+  cancelQuery,
   clearQueryHistory,
   deleteSnippet,
   type ExportFormat,
@@ -52,9 +53,13 @@ type RunTabResult =
 
 type RunState =
   | { kind: "idle" }
-  | { kind: "running"; index?: number; total?: number }
+  | { kind: "running"; requestId: string; index?: number; total?: number }
   | { kind: "error"; message: string }
   | { kind: "done"; tabs: RunTabResult[] };
+
+function newRequestId(): string {
+  return `req-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
 
 /**
  * カーソル位置のステートメントを切り出し、エディタ内の開始行も返す。
@@ -244,6 +249,15 @@ export function SqlEditor({
   sqlTextRef.current = sqlText;
   const databaseRef = useRef(database);
   databaseRef.current = database;
+  const runStateRef = useRef(runState);
+  runStateRef.current = runState;
+
+  const cancelActive = useCallback(() => {
+    const s = runStateRef.current;
+    if (s.kind !== "running") return false;
+    void cancelQuery(s.requestId);
+    return true;
+  }, []);
 
   // runState が done になったら結果サマリを親に通知 (status bar 用)
   useEffect(() => {
@@ -300,9 +314,10 @@ export function SqlEditor({
         return;
       }
       viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
-      setRunState({ kind: "running" });
+      const requestId = newRequestId();
+      setRunState({ kind: "running", requestId });
       try {
-        const result = await executeQuery(connectionId, trimmed, databaseRef.current);
+        const result = await executeQuery(connectionId, trimmed, databaseRef.current, requestId);
         setRunState({ kind: "done", tabs: [{ kind: "ok", sql: trimmed, result }] });
       } catch (e) {
         const message = String(e);
@@ -332,9 +347,10 @@ export function SqlEditor({
       viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
       const tabs: RunTabResult[] = [];
       for (let i = 0; i < stmts.length; i++) {
-        setRunState({ kind: "running", index: i + 1, total: stmts.length });
+        const requestId = newRequestId();
+        setRunState({ kind: "running", requestId, index: i + 1, total: stmts.length });
         try {
-          const result = await executeQuery(connectionId, stmts[i], databaseRef.current);
+          const result = await executeQuery(connectionId, stmts[i], databaseRef.current, requestId);
           tabs.push({ kind: "ok", sql: stmts[i], result });
         } catch (e) {
           tabs.push({ kind: "error", sql: stmts[i], message: String(e) });
@@ -455,10 +471,18 @@ export function SqlEditor({
               return true;
             },
           },
+          {
+            key: "Mod-.",
+            preventDefault: true,
+            run: () => {
+              cancelActive();
+              return true;
+            },
+          },
         ]),
       ),
     ];
-  }, [runAt, runAll, explainAt, schema, formatDocument]);
+  }, [runAt, runAll, explainAt, schema, formatDocument, cancelActive]);
 
   return (
     <div className="flex h-full min-h-0 w-full min-w-0 flex-col overflow-hidden">
@@ -1324,8 +1348,23 @@ function ResultsPane({
             aria-hidden
             className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
           />
-          {t("editor.running")}
-          {suffix}…
+          <span>
+            {t("editor.running")}
+            {suffix}…
+          </span>
+          <button
+            type="button"
+            onClick={() => {
+              if (runState.kind === "running") void cancelQuery(runState.requestId);
+            }}
+            className="ml-auto rounded-md border border-destructive/60 bg-destructive/10 px-2 py-0.5 text-[0.7rem] font-semibold text-destructive transition-colors hover:bg-destructive hover:text-background"
+            title="⌘."
+          >
+            {t("editor.cancel")}
+          </button>
+        </div>
+        <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-accent/10">
+          <span className="block h-full w-1/3 animate-[indeterminate_1.15s_ease-in-out_infinite] bg-accent" />
         </div>
         <div className="flex flex-col gap-1.5 pt-1">
           <Skeleton className="h-2.5" style={{ width: "70%" }} />
