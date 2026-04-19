@@ -63,6 +63,16 @@ jobs:
 
       - run: pnpm install --frozen-lockfile
 
+      # tag push (v1.2.3) の時は tauri.conf.json / Cargo.toml / package.json の version を tag から差し替える。
+      # これをしないと dmg / msi のファイル名が tauri.conf.json の固定 version (0.1.0) になってしまう。
+      - name: Sync version from tag
+        if: github.ref_type == 'tag'
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Using version: $VERSION"
+          node scripts/sync-version.mjs "$VERSION"
+
       # Apple signing: secret が本当に設定されている時だけ env を流す。
       # 空文字を渡すと tauri-action が import を試みて失敗するため。
       # cert 未設定時は ad-hoc 署名 (APPLE_SIGNING_IDENTITY=-) で unsigned .app を作る。
