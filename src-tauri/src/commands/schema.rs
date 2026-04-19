@@ -485,7 +485,10 @@ async fn run_with_registration(
     let mut conn = pool.get_conn().await?;
     if let Some(rid) = request_id {
         let thread_id = conn.id();
-        let mut running = state.running_queries.lock().expect("running_queries poisoned");
+        let mut running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
         running.insert(
             rid,
             RunningQuery {
@@ -498,7 +501,10 @@ async fn run_with_registration(
     let outcome = run_on_conn(&mut conn, sql, database, start).await;
 
     if let Some(rid) = request_id {
-        let mut running = state.running_queries.lock().expect("running_queries poisoned");
+        let mut running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
         running.remove(&rid);
     }
     conn.disconnect().await.ok();
@@ -557,7 +563,10 @@ async fn run_on_conn(
 #[tauri::command]
 pub async fn cancel_query(state: State<'_, AppState>, request_id: Uuid) -> AppResult<bool> {
     let handle = {
-        let running = state.running_queries.lock().expect("running_queries poisoned");
+        let running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
         running.get(&request_id).copied()
     };
     let Some(handle) = handle else {
