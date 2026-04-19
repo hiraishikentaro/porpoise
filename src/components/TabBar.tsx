@@ -1,4 +1,5 @@
 import { useCallback, useRef, useState } from "react";
+import { KbdHint } from "@/components/ui/kbd-hint";
 import { colorForName, initialsOf, ringColorFor, statusColorVars } from "@/lib/status-color";
 import type { SavedConnection } from "@/lib/tauri";
 
@@ -260,11 +261,12 @@ export function TabBar({
       <button
         type="button"
         onClick={onNew}
-        className="flex h-full w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-sidebar-accent/40 hover:text-accent"
+        className="group relative flex h-full w-10 shrink-0 items-center justify-center border-l border-border text-muted-foreground transition-colors hover:bg-sidebar-accent/40 hover:text-accent"
         aria-label="New tab"
-        title="New connection"
+        title="New tab"
       >
         <PlusIcon />
+        <KbdHint keys={["⌘", "T"]} placement="top" />
       </button>
     </div>
   );

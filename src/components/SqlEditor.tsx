@@ -7,6 +7,7 @@ import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
 import { EmptyState } from "@/components/ui/empty-state";
+import { KbdHint } from "@/components/ui/kbd-hint";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
@@ -505,58 +506,64 @@ export function SqlEditor({
           <button
             type="button"
             onClick={formatDocument}
-            className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
-            title="Format SQL (⇧⌘F)"
+            className="group relative rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent"
+            title="Format SQL"
           >
             Format
+            <KbdHint keys={["⇧", "⌘", "F"]} />
           </button>
           <button
             type="button"
             onClick={explainAt}
             disabled={runState.kind === "running"}
-            className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
-            title="EXPLAIN this statement (⌥↵)"
+            className="group relative rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+            title="EXPLAIN this statement"
           >
             Explain
+            <KbdHint keys={["⌥", "↵"]} />
           </button>
           <button
             type="button"
             onClick={runAt}
             disabled={runState.kind === "running"}
-            className="rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
-            title="Run statement at cursor (⌘↵)"
+            className="group relative rounded-md border border-border px-2 py-0.5 text-xs text-muted-foreground hover:border-accent hover:text-accent disabled:opacity-50"
+            title="Run statement at cursor"
           >
             Run
+            <KbdHint keys={["⌘", "↵"]} />
           </button>
           <button
             type="button"
             onClick={runAll}
             disabled={runState.kind === "running"}
-            className="rounded-md border border-accent bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground disabled:opacity-50"
-            title="Run all statements (⇧⌘↵)"
+            className="group relative rounded-md border border-accent bg-accent px-2 py-0.5 text-xs font-semibold text-accent-foreground disabled:opacity-50"
+            title="Run all statements"
           >
             Run all
+            <KbdHint keys={["⇧", "⌘", "↵"]} />
           </button>
           {onSplit && (
             <button
               type="button"
               onClick={onSplit}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-accent hover:text-accent"
-              title="Split pane right (⌘⇧D)"
+              className="group relative inline-flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-accent hover:text-accent"
+              title="Split pane right"
               aria-label="Split pane right"
             >
               <SplitIcon />
+              <KbdHint keys={["⇧", "⌘", "D"]} />
             </button>
           )}
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="inline-flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
+              className="group relative inline-flex h-6 w-6 items-center justify-center rounded-md border border-border text-muted-foreground transition-colors hover:border-destructive hover:text-destructive"
               title="Close this pane"
               aria-label="Close pane"
             >
               ✕
+              <KbdHint keys={["⌘", "W"]} />
             </button>
           )}
         </div>
