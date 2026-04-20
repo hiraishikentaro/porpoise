@@ -4,6 +4,8 @@ import { Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
+import { tokyoNight } from "@uiw/codemirror-theme-tokyo-night";
+import { tokyoNightDay } from "@uiw/codemirror-theme-tokyo-night-day";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
@@ -272,7 +274,8 @@ export function SqlEditor({
   const [runState, setRunState] = useState<RunState>({ kind: "idle" });
   const [historyOpen, setHistoryOpen] = useState(false);
   const viewRef = useRef<EditorView | null>(null);
-  const { settings } = useSettings();
+  const { settings, resolvedTheme } = useSettings();
+  const cmTheme = resolvedTheme === "light" ? tokyoNightDay : tokyoNight;
 
   // runAt / runAll は keymap に渡すため最新値を ref で保つ
   const sqlTextRef = useRef(sqlText);
@@ -714,7 +717,7 @@ export function SqlEditor({
             <CodeMirror
               value={sqlText}
               height="100%"
-              theme="dark"
+              theme={cmTheme}
               extensions={extensions}
               onChange={(v) => {
                 setSqlText(v);
