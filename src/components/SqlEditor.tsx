@@ -2,6 +2,7 @@ import { autocompletion } from "@codemirror/autocomplete";
 import { MySQL, sql as sqlLang } from "@codemirror/lang-sql";
 import { Prec, StateEffect, StateField } from "@codemirror/state";
 import { Decoration, type DecorationSet, EditorView, keymap } from "@codemirror/view";
+import { useVirtualizer } from "@tanstack/react-virtual";
 import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -1755,85 +1756,22 @@ function SingleResultView({
           <QueryExportMenu connectionId={connectionId} database={database} lastSql={lastSql} />
         </div>
       </header>
-      <div className="flex-1 overflow-auto">
-        <table className="text-left text-sm" style={{ tableLayout: "fixed" }}>
-          <thead className="sticky top-0 bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur">
-            <tr className="border-b border-border">
-              {r.columns.map((c, ci) => {
-                const sorted = sort?.col === ci ? sort.dir : null;
-                const w = colWidths[ci] ?? RES_COL_DEFAULT;
-                return (
-                  <th
-                    key={c}
-                    style={{ width: w, minWidth: w, maxWidth: w }}
-                    className="relative whitespace-nowrap p-0"
-                  >
-                    <div className="flex h-full w-full items-stretch">
-                      <button
-                        type="button"
-                        onClick={() => cycleSort(ci)}
-                        className={`flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
-                          sorted ? "text-accent" : ""
-                        }`}
-                        title="Click to sort"
-                      >
-                        <span className="truncate">{c}</span>
-                        {sorted && (
-                          <span aria-hidden className="ml-auto text-[0.65rem]">
-                            {sorted === "desc" ? "▼" : "▲"}
-                          </span>
-                        )}
-                      </button>
-                      <button
-                        type="button"
-                        aria-label={`Resize ${c}`}
-                        onPointerDown={(e) => startColResize(e, ci)}
-                        className="w-1.5 shrink-0 cursor-col-resize border-r border-border/60 bg-transparent transition-colors hover:bg-accent/50 active:bg-accent/70"
-                        title="Drag to resize"
-                      />
-                    </div>
-                  </th>
-                );
-              })}
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((row, i) => {
-              const rowKey = `row-${i}`;
-              const isSelected = selected.has(i);
-              return (
-                <tr
-                  key={rowKey}
-                  onClick={(e) => handleRowClick(e, i)}
-                  onContextMenu={(e) => handleRowContextMenu(e, i)}
-                  className={`border-b border-border/30 ${
-                    isSelected ? "bg-accent/20 hover:bg-accent/25" : "hover:bg-sidebar-accent/30"
-                  }`}
-                >
-                  {row.map((cell, ci) => (
-                    <td
-                      key={`${rowKey}:${r.columns[ci] ?? ci}`}
-                      className="truncate border-r border-border/20 px-3 py-1.5"
-                      title={cell ?? ""}
-                    >
-                      {cell === null ? (
-                        <span className="text-muted-foreground/60 italic">NULL</span>
-                      ) : (
-                        cell
-                      )}
-                    </td>
-                  ))}
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
-        {rows.length === 0 && (
-          <p className="px-4 py-3 text-xs text-muted-foreground">
-            {isFiltered ? "No rows match filter." : "No rows."}
-          </p>
-        )}
-      </div>
+      <VirtualizedResultGrid
+        columns={r.columns}
+        rows={rows}
+        colWidths={colWidths}
+        sort={sort}
+        selected={selected}
+        onCycleSort={cycleSort}
+        onStartResize={startColResize}
+        onRowClick={handleRowClick}
+        onRowContextMenu={handleRowContextMenu}
+      />
+      {rows.length === 0 && (
+        <p className="px-4 py-3 text-xs text-muted-foreground">
+          {isFiltered ? "No rows match filter." : "No rows."}
+        </p>
+      )}
 
       {ctxMenu && (
         <div
@@ -1880,6 +1818,134 @@ function extractFromTable(sql: string): string {
   const m = sql.match(/\bFROM\s+`?([\w$]+)`?(?:\s*\.\s*`?([\w$]+)`?)?/i);
   if (!m) return "exported_rows";
   return m[2] ?? m[1] ?? "exported_rows";
+}
+
+/**
+ * SELECT の結果行を仮想化して描画するグリッド。DOM 行を画面内の可視 + overscan 分に
+ * 制限するので、数万〜数十万行返すクエリでも UI が固まらない。
+ */
+function VirtualizedResultGrid({
+  columns,
+  rows,
+  colWidths,
+  sort,
+  selected,
+  onCycleSort,
+  onStartResize,
+  onRowClick,
+  onRowContextMenu,
+}: {
+  columns: string[];
+  rows: (string | null)[][];
+  colWidths: number[];
+  sort: SortState;
+  selected: Set<number>;
+  onCycleSort: (col: number) => void;
+  onStartResize: (e: React.PointerEvent, col: number) => void;
+  onRowClick: (e: React.MouseEvent, row: number) => void;
+  onRowContextMenu: (e: React.MouseEvent, row: number) => void;
+}) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: rows.length,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 28,
+    overscan: 20,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalHeight = virtualizer.getTotalSize();
+  const totalWidth = colWidths.reduce((sum, w) => sum + (w ?? RES_COL_DEFAULT), 0);
+
+  return (
+    <div
+      ref={parentRef}
+      className="min-h-0 flex-1 overflow-auto"
+      style={{ fontVariantNumeric: "tabular-nums" }}
+    >
+      <div style={{ width: totalWidth, position: "relative" }}>
+        {/* Sticky header */}
+        <div
+          className="sticky top-0 z-10 flex border-b border-border bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur"
+          style={{ width: totalWidth }}
+        >
+          {columns.map((c, ci) => {
+            const sorted = sort?.col === ci ? sort.dir : null;
+            const w = colWidths[ci] ?? RES_COL_DEFAULT;
+            return (
+              <div key={c} style={{ width: w }} className="relative flex shrink-0 items-stretch">
+                <button
+                  type="button"
+                  onClick={() => onCycleSort(ci)}
+                  className={`flex min-w-0 flex-1 items-center gap-1 px-3 py-2 text-left transition-colors hover:bg-sidebar-accent/40 ${
+                    sorted ? "text-accent" : ""
+                  }`}
+                  title="Click to sort"
+                >
+                  <span className="truncate">{c}</span>
+                  {sorted && (
+                    <span aria-hidden className="ml-auto text-[0.65rem]">
+                      {sorted === "desc" ? "▼" : "▲"}
+                    </span>
+                  )}
+                </button>
+                <button
+                  type="button"
+                  aria-label={`Resize ${c}`}
+                  onPointerDown={(e) => onStartResize(e, ci)}
+                  className="w-1.5 shrink-0 cursor-col-resize border-r border-border/60 bg-transparent transition-colors hover:bg-accent/50 active:bg-accent/70"
+                  title="Drag to resize"
+                />
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Virtualised rows */}
+        <div style={{ height: totalHeight, position: "relative" }}>
+          {virtualItems.map((virtualRow) => {
+            const rowIdx = virtualRow.index;
+            const row = rows[rowIdx];
+            if (!row) return null;
+            const isSelected = selected.has(rowIdx);
+            return (
+              // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
+              // biome-ignore lint/a11y/useKeyWithClickEvents: selection via modifier+click; keyboard navigation is a future pass
+              <div
+                key={virtualRow.key}
+                role="row"
+                tabIndex={-1}
+                onClick={(e) => onRowClick(e, rowIdx)}
+                onContextMenu={(e) => onRowContextMenu(e, rowIdx)}
+                className={`absolute top-0 left-0 flex border-b border-border/30 text-sm ${
+                  isSelected ? "bg-accent/20 hover:bg-accent/25" : "hover:bg-sidebar-accent/30"
+                }`}
+                style={{
+                  width: totalWidth,
+                  height: virtualRow.size,
+                  transform: `translateY(${virtualRow.start}px)`,
+                }}
+              >
+                {row.map((cell, ci) => (
+                  <div
+                    key={`${virtualRow.key}:${columns[ci] ?? ci}`}
+                    style={{ width: colWidths[ci] ?? RES_COL_DEFAULT }}
+                    className="shrink-0 truncate border-r border-border/20 px-3 py-1.5"
+                    title={cell ?? ""}
+                  >
+                    {cell === null ? (
+                      <span className="text-muted-foreground/60 italic">NULL</span>
+                    ) : (
+                      cell
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function QueryExportMenu({
