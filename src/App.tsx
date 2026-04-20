@@ -632,8 +632,12 @@ function App() {
         }
 
         // table タブ / connection タブ内のテーブル詳細では Filter bar を toggle 起動。
+        // 全タブが常時マウントされている (hidden で隠す) ため、
+        // アクティブなタブの toggle ボタンに限定して querySelector する。
         // TableView 側のボタンが auto-add draft + value focus を担当する。
-        const toggleBtn = document.querySelector<HTMLButtonElement>("[data-table-filter-toggle]");
+        const toggleBtn = document.querySelector<HTMLButtonElement>(
+          '[data-active-tab="true"] [data-table-filter-toggle]',
+        );
         if (toggleBtn) {
           e.preventDefault();
           e.stopPropagation();
@@ -777,7 +781,11 @@ function App() {
               const visibilityClass = isActive ? "flex" : "hidden";
               if (tab.kind === "connection") {
                 return (
-                  <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                  <div
+                    key={tab.id}
+                    data-active-tab={isActive ? "true" : undefined}
+                    className={`${visibilityClass} min-h-0 flex-1 flex-col`}
+                  >
                     <DatabaseBrowser
                       connection={tab.connection}
                       onOpenTable={handleOpenTableInTab}
@@ -789,7 +797,11 @@ function App() {
               }
               if (tab.kind === "table") {
                 return (
-                  <div key={tab.id} className={`${visibilityClass} min-h-0 flex-1 flex-col`}>
+                  <div
+                    key={tab.id}
+                    data-active-tab={isActive ? "true" : undefined}
+                    className={`${visibilityClass} min-h-0 flex-1 flex-col`}
+                  >
                     <TableDetail
                       connectionId={tab.connection.id}
                       database={tab.database}
@@ -802,6 +814,7 @@ function App() {
               return (
                 <div
                   key={tab.id}
+                  data-active-tab={isActive ? "true" : undefined}
                   data-editor-drop-target={tab.id}
                   className={`${visibilityClass} min-h-0 flex-1 flex-col`}
                 >
