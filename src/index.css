@@ -182,6 +182,10 @@
   body {
     @apply bg-background text-foreground;
     font-family: var(--font-sans);
+    /* Inter は variable font。デフォルト 400 / 一段階 450 では暗背景で薄かったため
+     * 500 (Medium) まで上げる。Hiragino Sans / SF Pro の静的ウェイトでも
+     * Medium にスナップされて日本語も判読しやすくなる。 */
+    font-weight: 500;
     font-feature-settings: "tnum" 1;
     font-optical-sizing: auto;
     text-rendering: optimizeLegibility;
