@@ -823,9 +823,16 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
                   key={virtualRow.key}
                   role="row"
                   tabIndex={-1}
-                  className={`absolute top-0 left-0 flex border-b border-border/30 text-sm odd:bg-sidebar-accent/20 hover:bg-sidebar-accent/40 ${
+                  // 選択中は `bg-accent/20` を適用するが、非選択時だけ odd ストライプを出す。
+                  // `odd:` は specificity が高く、同時適用だと選択色が消えるので排他にする。
+                  // SqlEditor の結果グリッドと同じ見た目ルールに揃える。
+                  className={`absolute top-0 left-0 flex border-b border-border/30 text-sm ${
                     rowDeleted ? "bg-destructive/15" : ""
-                  } ${isSelected ? "bg-accent/20 hover:bg-accent/25" : ""}`}
+                  } ${
+                    isSelected
+                      ? "bg-accent/20 hover:bg-accent/25"
+                      : "odd:bg-sidebar-accent/20 hover:bg-sidebar-accent/30"
+                  }`}
                   style={{
                     width: totalWidth,
                     height: virtualRow.size,
