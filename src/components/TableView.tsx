@@ -150,6 +150,10 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
   const [pendingFocusDraftId, setPendingFocusDraftId] = useState<string | null>(null);
   /** "View full value" モーダル */
   const [cellView, setCellView] = useState<{ column: string; value: string | null } | null>(null);
+  /** 非表示にしているカラム名集合 (Column visibility ポップオーバ) */
+  const [hiddenColumns, setHiddenColumns] = useState<Set<string>>(new Set());
+  /** Columns ポップオーバの開閉 */
+  const [columnsOpen, setColumnsOpen] = useState(false);
 
   // Filter ボタン押下: トグル + 開くなら draft 0 件のとき 1 件自動追加 + value にフォーカス
   function toggleFiltersWithAutoDraft() {
@@ -411,7 +415,15 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
       ),
     [state.columnNames, userColWidths, measuredColWidths],
   );
-  const totalWidth = colWidths.reduce((a, b) => a + b, 0);
+  /** 表示する列の元 index 配列 (Column visibility 適用後) */
+  const visibleColIdxs = useMemo(
+    () =>
+      state.columnNames
+        .map((_, i) => i)
+        .filter((i) => !hiddenColumns.has(state.columnNames[i] ?? "")),
+    [state.columnNames, hiddenColumns],
+  );
+  const totalWidth = visibleColIdxs.reduce((sum, i) => sum + (colWidths[i] ?? 0), 0);
 
   const startColResize = useCallback(
     (e: React.PointerEvent, colName: string, startWidth: number) => {
@@ -687,6 +699,14 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
               <span aria-hidden>+</span> Row
             </button>
           )}
+          <ColumnsPopover
+            allColumns={state.columnNames}
+            hiddenColumns={hiddenColumns}
+            onChange={setHiddenColumns}
+            open={columnsOpen}
+            onToggle={() => setColumnsOpen((v) => !v)}
+            onClose={() => setColumnsOpen(false)}
+          />
           <ExportMenu
             connectionId={connectionId}
             database={database}
@@ -752,7 +772,8 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
             className="sticky top-0 z-10 flex border-b border-border bg-sidebar/85 text-[0.66rem] font-semibold uppercase tracking-[0.1em] text-muted-foreground backdrop-blur"
             style={{ width: totalWidth }}
           >
-            {state.columnNames.map((col, i) => {
+            {visibleColIdxs.map((i) => {
+              const col = state.columnNames[i] ?? "";
               const pk = columnIsPk(i);
               const sort = sortKeys.find((k) => k.column === col);
               const width = colWidths[i];
@@ -828,6 +849,7 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
                     columns={columns}
                     columnNames={state.columnNames}
                     colWidths={colWidths}
+                    visibleColIdxs={visibleColIdxs}
                     newRow={nr}
                     editing={editing}
                     setEditing={setEditing}
@@ -844,7 +866,6 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
                 );
               }
               const existingRowIdx = idx - newRows.length;
-              const row = state.rows[existingRowIdx];
               const rowDeleted = deletedRows.has(existingRowIdx);
               const isSelected = selectedRows.has(existingRowIdx);
               return (
@@ -907,7 +928,7 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
                     });
                   }}
                 >
-                  {row.map((_, ci) => {
+                  {visibleColIdxs.map((ci) => {
                     const rowIdx = existingRowIdx;
                     const colIdx = ci;
                     const value = cellValue(rowIdx, colIdx);
@@ -1646,12 +1667,122 @@ function QuickFilterButton({
   );
 }
 
+function ColumnsPopover({
+  allColumns,
+  hiddenColumns,
+  onChange,
+  open,
+  onToggle,
+  onClose,
+}: {
+  allColumns: string[];
+  hiddenColumns: Set<string>;
+  onChange: (next: Set<string>) => void;
+  open: boolean;
+  onToggle: () => void;
+  onClose: () => void;
+}) {
+  // 外側クリック / Esc で閉じる
+  useEffect(() => {
+    if (!open) return;
+    const onClick = (e: MouseEvent) => {
+      const t = e.target as HTMLElement;
+      if (!t.closest("[data-columns-popover]") && !t.closest("[data-columns-toggle]")) {
+        onClose();
+      }
+    };
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("mousedown", onClick);
+    window.addEventListener("keydown", onKey);
+    return () => {
+      window.removeEventListener("mousedown", onClick);
+      window.removeEventListener("keydown", onKey);
+    };
+  }, [open, onClose]);
+
+  const visibleCount = allColumns.length - hiddenColumns.size;
+  const hiddenCount = hiddenColumns.size;
+  return (
+    <div className="relative">
+      <button
+        type="button"
+        data-columns-toggle
+        onClick={onToggle}
+        className={`inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[0.7rem] transition-colors ${
+          hiddenCount > 0
+            ? "border-accent/60 bg-accent/10 text-accent"
+            : "border-border text-muted-foreground hover:border-accent/60 hover:text-accent"
+        }`}
+        title="Show / hide columns (⌘⌥F)"
+      >
+        Columns{hiddenCount > 0 ? ` · ${visibleCount}/${allColumns.length}` : ""}
+      </button>
+      {open && (
+        <div
+          data-columns-popover
+          className="absolute right-0 z-30 mt-1 flex w-64 flex-col gap-1 rounded-md border border-border bg-popover p-2 text-xs shadow-[0_8px_24px_-8px_oklch(0_0_0/55%),0_0_0_1px_oklch(1_0_0/3%)_inset]"
+        >
+          <div className="flex items-center justify-between px-1 pb-1">
+            <span className="font-mono text-[0.6rem] uppercase tracking-[0.14em] text-muted-foreground/80">
+              Columns
+            </span>
+            <div className="flex items-center gap-1">
+              <button
+                type="button"
+                onClick={() => onChange(new Set())}
+                disabled={hiddenCount === 0}
+                className="rounded-sm px-1.5 py-0.5 text-[0.62rem] text-muted-foreground hover:text-accent disabled:opacity-40"
+              >
+                Show all
+              </button>
+              <button
+                type="button"
+                onClick={() => onChange(new Set(allColumns))}
+                disabled={hiddenCount === allColumns.length}
+                className="rounded-sm px-1.5 py-0.5 text-[0.62rem] text-muted-foreground hover:text-destructive disabled:opacity-40"
+              >
+                Hide all
+              </button>
+            </div>
+          </div>
+          <ul className="flex max-h-[60vh] flex-col gap-0.5 overflow-auto">
+            {allColumns.map((col) => {
+              const visible = !hiddenColumns.has(col);
+              return (
+                <li key={col}>
+                  <label className="flex cursor-pointer items-center gap-2 rounded-sm px-2 py-1 hover:bg-sidebar-accent/40">
+                    <input
+                      type="checkbox"
+                      checked={visible}
+                      onChange={(e) => {
+                        const next = new Set(hiddenColumns);
+                        if (e.currentTarget.checked) next.delete(col);
+                        else next.add(col);
+                        onChange(next);
+                      }}
+                      className="h-3.5 w-3.5 cursor-pointer accent-accent"
+                    />
+                    <span className="truncate">{col}</span>
+                  </label>
+                </li>
+              );
+            })}
+          </ul>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function NewRowView({
   virtualRow,
   totalWidth,
   columns,
   columnNames,
   colWidths,
+  visibleColIdxs,
   newRow,
   editing,
   setEditing,
@@ -1663,6 +1794,7 @@ function NewRowView({
   columns: ColumnInfo[];
   columnNames: string[];
   colWidths: number[];
+  visibleColIdxs: number[];
   newRow: NewRow;
   editing: EditingCell;
   setEditing: (c: EditingCell) => void;
@@ -1683,7 +1815,8 @@ function NewRowView({
       }}
       onContextMenu={onContextMenu}
     >
-      {columnNames.map((name, colIdx) => {
+      {visibleColIdxs.map((colIdx) => {
+        const name = columnNames[colIdx] ?? "";
         const col = columns[colIdx] ?? null;
         const kind: EditorKind = col ? editorFor(col).kind : "text";
         const longKind = isLongEditor(kind);
