@@ -10,6 +10,7 @@ import { ShortcutsModal } from "@/components/ShortcutsModal";
 import { StatusBar } from "@/components/StatusBar";
 import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
+import { ToastStack } from "@/components/ToastStack";
 import { KbdHint } from "@/components/ui/kbd-hint";
 import { useT } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
@@ -19,6 +20,7 @@ import {
   listConnections,
   type SavedConnection,
 } from "@/lib/tauri";
+import { useToast } from "@/lib/toast";
 
 const connectionTabId = (connId: string) => `conn:${connId}`;
 const tableTabId = (connId: string, database: string, table: string) =>
@@ -138,7 +140,6 @@ function App() {
   const [savedConnections, setSavedConnections] = useState<SavedConnection[]>([]);
   const [tabs, setTabs] = useState<Tab[]>([]);
   const [activeTabId, setActiveTabId] = useState<string | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [editorSeq, setEditorSeq] = useState(1);
   const [commandPaletteOpen, setCommandPaletteOpen] = useState(false);
@@ -153,6 +154,9 @@ function App() {
   const updateSettingRef = useRef(updateSetting);
   updateSettingRef.current = updateSetting;
   const t = useT();
+  const toast = useToast();
+  const toastRef = useRef(toast);
+  toastRef.current = toast;
 
   // macOS WKWebView の autocorrect / autocapitalize / spellcheck を全 input で無効化。
   // password 以外の全 input に属性を付与し、動的に追加された input も MutationObserver で拾う。
@@ -436,8 +440,11 @@ function App() {
       return next;
     });
     upsertConnectionTab(conn);
-    setToast(`Connected — MySQL ${version}`);
-    window.setTimeout(() => setToast(null), 2400);
+    toastRef.current.push({
+      kind: "success",
+      title: "Connected",
+      message: `MySQL ${version}`,
+    });
   }
 
   function handleClosed(id: string) {
@@ -933,18 +940,6 @@ function App() {
         {settingsOpen && <SettingsModal onClose={() => setSettingsOpen(false)} />}
 
         {shortcutsOpen && <ShortcutsModal onClose={() => setShortcutsOpen(false)} />}
-
-        {toast && (
-          <div className="pointer-events-none fixed bottom-8 left-1/2 -translate-x-1/2 animate-in fade-in slide-in-from-bottom-2 rounded-md border border-accent/40 bg-card/90 px-4 py-2 shadow-[0_10px_30px_-10px_oklch(0_0_0/60%),0_0_0_1px_oklch(1_0_0/3%)_inset] backdrop-blur">
-            <div className="flex items-center gap-2.5 text-[0.82rem]">
-              <span
-                aria-hidden
-                className="inline-block h-2 w-2 rounded-full bg-accent shadow-[0_0_0_3px_var(--accent-glow),0_0_10px_2px_var(--accent-glow)]"
-              />
-              <span className="text-foreground">{toast}</span>
-            </div>
-          </div>
-        )}
       </main>
       <StatusBar
         activeTab={activeTab ?? null}
@@ -953,6 +948,7 @@ function App() {
         totalTabs={tabs.length}
       />
       <ConnectingOverlay connection={connectingConnection} />
+      <ToastStack />
     </div>
   );
 }

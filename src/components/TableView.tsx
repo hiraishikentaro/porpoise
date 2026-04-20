@@ -34,6 +34,7 @@ import {
   selectTableRows,
   type TablePage,
 } from "@/lib/tauri";
+import { useToast } from "@/lib/toast";
 
 const PAGE_SIZE = 500;
 const MIN_COL_WIDTH = 80;
@@ -128,6 +129,7 @@ function filterDraftToFilter(d: FilterDraft): Filter | null {
 export function TableView({ connectionId, database, table, columns, tabId }: Props) {
   const publishStatus = useTabStatusPublish(tabId);
   const t = useT();
+  const toast = useToast();
   const [state, setState] = useState<State>(initialState);
   const [edits, setEdits] = useState<EditMap>({});
   const [newRows, setNewRows] = useState<NewRow[]>([]);
@@ -139,7 +141,6 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
   const [contextMenu, setContextMenu] = useState<ContextMenu | null>(null);
   const [selectedRows, setSelectedRows] = useState<Set<number>>(new Set());
   const lastSelectedRef = useRef<number | null>(null);
-  const [copyToast, setCopyToast] = useState<string | null>(null);
   const [sortKeys, setSortKeys] = useState<SortKey[]>([]);
   const [filterDrafts, setFilterDrafts] = useState<FilterDraft[]>([]);
   const [filtersOpen, setFiltersOpen] = useState(false);
@@ -590,13 +591,13 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
     const text = formatRowsAs(data, state.columnNames, format, table);
     try {
       await navigator.clipboard.writeText(text);
-      setCopyToast(
-        `Copied ${data.length} row${data.length > 1 ? "s" : ""} as ${format.toUpperCase()}`,
-      );
-      window.setTimeout(() => setCopyToast(null), 1600);
+      toast.push({
+        kind: "success",
+        title: "Copied",
+        message: `${data.length} row${data.length > 1 ? "s" : ""} as ${format.toUpperCase()}`,
+      });
     } catch {
-      setCopyToast("Copy failed");
-      window.setTimeout(() => setCopyToast(null), 1600);
+      toast.push({ kind: "error", title: "Copy failed", message: "Clipboard write rejected." });
     }
   }
 
@@ -1088,15 +1089,6 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
           value={cellView.value}
           onClose={() => setCellView(null)}
         />
-      )}
-
-      {copyToast && (
-        <div
-          role="status"
-          className="pointer-events-none fixed bottom-6 left-1/2 z-50 -translate-x-1/2 rounded-md border border-border bg-popover px-3 py-1.5 text-xs text-foreground shadow-lg"
-        >
-          {copyToast}
-        </div>
       )}
 
       {(() => {
