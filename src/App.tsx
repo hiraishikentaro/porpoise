@@ -598,17 +598,31 @@ function App() {
         if (activeEl?.closest(".cm-content")) return;
         const id = activeTabIdRef.current;
         const active = id ? tabsRef.current.find((t) => t.id === id) : null;
-        if (!active || active.kind !== "editor") return;
-        const paneId = focusedPaneIdRef.current ?? active.panes[0]?.id;
-        if (!paneId) return;
-        const input = document.querySelector<HTMLInputElement>(
-          `[data-pane-id="${paneId}"] [data-results-filter="true"]`,
-        );
-        if (input) {
+        if (!active) return;
+
+        if (active.kind === "editor") {
+          // SqlEditor: フォーカス中 pane の結果フィルタ input にフォーカス
+          const paneId = focusedPaneIdRef.current ?? active.panes[0]?.id;
+          if (!paneId) return;
+          const input = document.querySelector<HTMLInputElement>(
+            `[data-pane-id="${paneId}"] [data-results-filter="true"]`,
+          );
+          if (input) {
+            e.preventDefault();
+            e.stopPropagation();
+            input.focus();
+            input.select();
+          }
+          return;
+        }
+
+        // table タブ / connection タブ内のテーブル詳細では Filter bar を toggle 起動。
+        // TableView 側のボタンが auto-add draft + value focus を担当する。
+        const toggleBtn = document.querySelector<HTMLButtonElement>("[data-table-filter-toggle]");
+        if (toggleBtn) {
           e.preventDefault();
           e.stopPropagation();
-          input.focus();
-          input.select();
+          toggleBtn.click();
         }
         return;
       }
