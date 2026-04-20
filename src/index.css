@@ -1,20 +1,20 @@
 @import "tailwindcss";
 @import "tw-animate-css";
 @import "shadcn/tailwind.css";
-@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist";
 @import "@fontsource-variable/fraunces";
 
 @custom-variant dark (&:is(.dark *));
 
 @theme inline {
   /*
-   * Inter Variable を軸にした UI 特化スタック。
-   *  - 小サイズでの可読性が高く、字形が開いている (a / e / c など)
+   * Geist Sans Variable を軸にしたスタック。Inter より character があり、
+   * Vercel / Cursor / Linear 系のデータツールで馴染みのある雰囲気。
    *  - 日本語は Hiragino Sans にフォールバック
-   *  - Inter が使えない環境では OS ネイティブ (SF / Segoe UI) に降る
+   *  - Geist が使えない環境では OS ネイティブ (SF / Segoe UI) に降る
    */
   --font-sans:
-    "Inter Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI",
+    "Geist Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Yu Gothic UI",
     "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
   --font-mono:
     ui-monospace, "SF Mono", SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono",
