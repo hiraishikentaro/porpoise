@@ -177,8 +177,8 @@ async fn resolve_target(config: &ConnectionConfig) -> AppResult<(String, u16, Op
 }
 
 async fn verify_connection(pool: &Pool) -> AppResult<()> {
-    let conn = pool.get_conn().await?;
-    conn.disconnect().await.ok();
+    // 取得した conn は drop でプールに戻す。disconnect すると毎回再ハンドシェイクが走るため。
+    let _conn = pool.get_conn().await?;
     Ok(())
 }
 
@@ -187,10 +187,13 @@ async fn open_pool_with(
     max_connections: usize,
 ) -> AppResult<OpenedConnection> {
     let (host, port, tunnel) = resolve_target(config).await?;
+    // - min=1 で 1 本は常に温存 (SSH 越しの再ハンドシェイクは高コスト & 失敗確率も高まる)
+    // - inactive_ttl=600s: 10 分アイドルで初めて回収。これより短いと頻繁な再認証が
+    //   "Access denied" やネットワーク glitch を引き寄せる
     let opts = build_opts(config, &host, port).pool_opts(
         PoolOpts::default()
-            .with_constraints(PoolConstraints::new(0, max_connections).unwrap_or_default())
-            .with_inactive_connection_ttl(Duration::from_secs(60)),
+            .with_constraints(PoolConstraints::new(1, max_connections).unwrap_or_default())
+            .with_inactive_connection_ttl(Duration::from_secs(600)),
     );
     let pool = Pool::new(opts);
     if let Err(e) = verify_connection(&pool).await {
@@ -222,6 +225,7 @@ pub async fn open(config: &ConnectionConfig) -> AppResult<OpenedConnection> {
 pub async fn fetch_version(pool: &Pool) -> AppResult<String> {
     let mut conn = pool.get_conn().await?;
     let version: Option<String> = conn.query_first("SELECT VERSION()").await?;
-    conn.disconnect().await.ok();
+    // conn は drop でプールに戻る。disconnect は呼ばない (毎回再ハンドシェイク回避)
+    drop(conn);
     version.ok_or_else(|| AppError::InvalidData("VERSION() returned no rows".into()))
 }
