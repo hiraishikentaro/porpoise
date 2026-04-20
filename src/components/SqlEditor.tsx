@@ -7,9 +7,11 @@ import { save as saveDialog } from "@tauri-apps/plugin-dialog";
 import CodeMirror from "@uiw/react-codemirror";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { format as formatSql } from "sql-formatter";
+import { CellViewerModal } from "@/components/CellViewerModal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { KbdHint } from "@/components/ui/kbd-hint";
 import { Skeleton } from "@/components/ui/skeleton";
+import { looksNumericByValues } from "@/lib/column-type";
 import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useSettings } from "@/lib/settings";
@@ -469,6 +471,19 @@ export function SqlEditor({
   }, [run]);
 
   const runAll = useCallback(() => {
+    // 選択範囲があればそれだけを runMany 対象にする (TablePlus 流の "Run selected")。
+    // 無ければドキュメント全体。
+    const view = viewRef.current;
+    if (view) {
+      const sel = view.state.selection.main;
+      if (!sel.empty) {
+        const selected = view.state.doc.sliceString(sel.from, sel.to).trim();
+        if (selected) {
+          runMany(selected);
+          return;
+        }
+      }
+    }
     runMany(sqlTextRef.current);
   }, [runMany]);
 
@@ -1600,6 +1615,7 @@ function SingleResultView({
   const [sort, setSort] = useState<SortState>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
   const [toast, setToast] = useState<string | null>(null);
+  const [cellView, setCellView] = useState<{ column: string; value: string | null } | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
 
   // 新しい結果に切り替わったら filter/selection/sort クリア + 列幅再計算
@@ -1864,6 +1880,7 @@ function SingleResultView({
         onStartResize={startColResize}
         onRowClick={handleRowClick}
         onRowContextMenu={handleRowContextMenu}
+        onCellExpand={(column, value) => setCellView({ column, value })}
       />
       {rows.length === 0 && (
         <p className="px-4 py-3 text-xs text-muted-foreground">
@@ -1907,6 +1924,14 @@ function SingleResultView({
         <div className="pointer-events-none absolute right-4 bottom-4 rounded-md border border-accent/40 bg-card/95 px-3 py-1.5 text-[0.72rem] shadow-lg backdrop-blur">
           {toast}
         </div>
+      )}
+
+      {cellView && (
+        <CellViewerModal
+          column={cellView.column}
+          value={cellView.value}
+          onClose={() => setCellView(null)}
+        />
       )}
     </div>
   );
@@ -2003,6 +2028,7 @@ function VirtualizedResultGrid({
   onStartResize,
   onRowClick,
   onRowContextMenu,
+  onCellExpand,
 }: {
   columns: string[];
   rows: (string | null)[][];
@@ -2013,8 +2039,14 @@ function VirtualizedResultGrid({
   onStartResize: (e: React.PointerEvent, col: number) => void;
   onRowClick: (e: React.MouseEvent, row: number) => void;
   onRowContextMenu: (e: React.MouseEvent, row: number) => void;
+  onCellExpand: (column: string, value: string | null) => void;
 }) {
   const parentRef = useRef<HTMLDivElement>(null);
+  // 値ベースで列の数値性を判定 (QueryResult には型情報が無いため)
+  const numericCols = useMemo(
+    () => columns.map((_, ci) => looksNumericByValues(rows, ci, 50)),
+    [columns, rows],
+  );
   const virtualizer = useVirtualizer({
     count: rows.length,
     getScrollElement: () => parentRef.current,
@@ -2095,11 +2127,15 @@ function VirtualizedResultGrid({
                 }}
               >
                 {row.map((cell, ci) => (
+                  // biome-ignore lint/a11y/noStaticElementInteractions: cell expand uses dblclick; keyboard equivalent is the row context menu
                   <div
                     key={`${virtualRow.key}:${columns[ci] ?? ci}`}
                     style={{ width: colWidths[ci] ?? RES_COL_DEFAULT }}
-                    className="shrink-0 truncate border-r border-border/20 px-3 py-1.5"
+                    className={`shrink-0 cursor-default truncate border-r border-border/20 px-3 py-1.5 ${
+                      numericCols[ci] ? "text-right tabular-nums" : ""
+                    }`}
                     title={cell ?? ""}
+                    onDoubleClick={() => onCellExpand(columns[ci] ?? `col_${ci}`, cell)}
                   >
                     {cell === null ? (
                       <span className="text-muted-foreground/60 italic">NULL</span>

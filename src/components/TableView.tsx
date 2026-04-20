@@ -13,9 +13,11 @@ function isLongEditor(kind: EditorKind): boolean {
 }
 
 import { save } from "@tauri-apps/plugin-dialog";
+import { CellViewerModal } from "@/components/CellViewerModal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { KbdHint } from "@/components/ui/kbd-hint";
 import { Skeleton } from "@/components/ui/skeleton";
+import { isNumericMysqlType } from "@/lib/column-type";
 import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useTabStatusPublish } from "@/lib/tab-status";
@@ -146,6 +148,8 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
   /** FilterBar が開いた直後にフォーカスを当てたい draft id (1 回だけ消費される) */
   const [pendingFocusDraftId, setPendingFocusDraftId] = useState<string | null>(null);
+  /** "View full value" モーダル */
+  const [cellView, setCellView] = useState<{ column: string; value: string | null } | null>(null);
 
   // Filter ボタン押下: トグル + 開くなら draft 0 件のとき 1 件自動追加 + value にフォーカス
   function toggleFiltersWithAutoDraft() {
@@ -918,16 +922,17 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
                       editing.col === colIdx;
                     const inlineEditing = isEditing && !longKind;
 
+                    const isNumeric = isNumericMysqlType(col?.data_type);
                     return (
                       // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
                       <div
                         key={`${virtualRow.key}:${state.columnNames[colIdx] ?? colIdx}`}
                         style={{ width: colWidths[colIdx] }}
                         className={`relative shrink-0 border-r border-border/20 px-3 py-1.5 ${
-                          dirty && !rowDeleted ? "bg-accent/20 text-foreground" : ""
-                        } ${canEdit ? "cursor-text" : "cursor-default"} ${
-                          rowDeleted ? "text-destructive line-through opacity-70" : ""
-                        }`}
+                          isNumeric ? "text-right tabular-nums" : ""
+                        } ${dirty && !rowDeleted ? "bg-accent/20 text-foreground" : ""} ${
+                          canEdit ? "cursor-text" : "cursor-default"
+                        } ${rowDeleted ? "text-destructive line-through opacity-70" : ""}`}
                         role="gridcell"
                         tabIndex={canEdit ? 0 : -1}
                         onDoubleClick={() => {
@@ -1069,7 +1074,19 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
             openFilterForColumn(column);
             setContextMenu(null);
           }}
+          onViewCell={(column, value) => {
+            setCellView({ column, value });
+            setContextMenu(null);
+          }}
           onClose={() => setContextMenu(null)}
+        />
+      )}
+
+      {cellView && (
+        <CellViewerModal
+          column={cellView.column}
+          value={cellView.value}
+          onClose={() => setCellView(null)}
         />
       )}
 
@@ -1436,6 +1453,7 @@ function RowContextMenu({
   onCopy,
   onQuickFilter,
   onFilterColumn,
+  onViewCell,
 }: {
   x: number;
   y: number;
@@ -1450,6 +1468,7 @@ function RowContextMenu({
   onCopy: (rows: number[], format: CopyFormat) => void;
   onQuickFilter: (column: string, op: FilterOp, value: string) => void;
   onFilterColumn: (column: string) => void;
+  onViewCell: (column: string, value: string | null) => void;
   onClose: () => void;
 }) {
   const style: React.CSSProperties = {
@@ -1501,6 +1520,15 @@ function RowContextMenu({
       )}
       {target.kind === "existing" && cellColumn && (
         <>
+          <button
+            type="button"
+            role="menuitem"
+            onClick={() => onViewCell(cellColumn, cellVal)}
+            className="flex w-full items-center gap-2 rounded-sm px-3 py-1.5 text-left hover:bg-sidebar-accent/40"
+          >
+            View full value…
+          </button>
+          <div className="my-1 h-px bg-border/50" />
           <div className="px-3 py-1 text-[0.62rem] font-semibold uppercase tracking-wider text-muted-foreground">
             Quick filter · {cellColumn}
           </div>
