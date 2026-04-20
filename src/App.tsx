@@ -613,6 +613,19 @@ function App() {
         return;
       }
 
+      // ⌥⌘F: TableView の Columns ポップオーバを開く
+      if (key === "f" && e.altKey) {
+        const toggle = document.querySelector<HTMLButtonElement>(
+          '[data-active-tab="true"] [data-columns-toggle]',
+        );
+        if (toggle) {
+          e.preventDefault();
+          e.stopPropagation();
+          toggle.click();
+        }
+        return;
+      }
+
       // ⌘F: エディタ (.cm-content) にフォーカスがあれば素通し。
       // それ以外なら active tab の focused pane にある結果フィルタを focus。
       if (key === "f" && !e.shiftKey) {
