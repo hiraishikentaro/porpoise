@@ -17,7 +17,7 @@ import { CellViewerModal } from "@/components/CellViewerModal";
 import { EmptyState } from "@/components/ui/empty-state";
 import { KbdHint } from "@/components/ui/kbd-hint";
 import { Skeleton } from "@/components/ui/skeleton";
-import { isNumericMysqlType } from "@/lib/column-type";
+import { isNumericMysqlType, looksNumericByValues } from "@/lib/column-type";
 import { useT } from "@/lib/i18n";
 import { type CopyFormat, formatRowsAs } from "@/lib/row-format";
 import { useTabStatusPublish } from "@/lib/tab-status";
@@ -425,6 +425,20 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
     [state.columnNames, hiddenColumns],
   );
   const totalWidth = visibleColIdxs.reduce((sum, i) => sum + (colWidths[i] ?? 0), 0);
+
+  /**
+   * 数値列判定。columns (describeTable) の data_type があればそれを使い、
+   * 無ければ値サンプルにフォールバック (describe が遅延したときの保険)。
+   */
+  const numericCols = useMemo(
+    () =>
+      state.columnNames.map((_, ci) => {
+        const col = columns[ci];
+        if (col?.data_type) return isNumericMysqlType(col.data_type);
+        return looksNumericByValues(state.rows, ci, 50);
+      }),
+    [state.columnNames, columns, state.rows],
+  );
 
   const startColResize = useCallback(
     (e: React.PointerEvent, colName: string, startWidth: number) => {
@@ -944,7 +958,7 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
                       editing.col === colIdx;
                     const inlineEditing = isEditing && !longKind;
 
-                    const isNumeric = isNumericMysqlType(col?.data_type);
+                    const isNumeric = numericCols[colIdx] ?? false;
                     return (
                       // biome-ignore lint/a11y/useSemanticElements: virtualised grid needs div-based rows
                       <div
