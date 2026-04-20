@@ -49,6 +49,7 @@ pub fn run() {
             commands::schema::select_table_rows,
             commands::schema::commit_changes,
             commands::schema::execute_query,
+            commands::schema::execute_query_stream,
             commands::schema::cancel_query,
             commands::schema::schema_snapshot,
             commands::schema::list_all_tables,

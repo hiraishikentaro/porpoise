@@ -282,6 +282,110 @@ export function cancelQuery(requestId: string): Promise<boolean> {
   return invoke<boolean>("cancel_query", { requestId });
 }
 
+export type StreamResult =
+  | { kind: "select"; columns: string[]; returned: number; elapsedMs: number }
+  | { kind: "affected"; rows: number; elapsedMs: number };
+
+export type StreamHandlers = {
+  onColumns?: (columns: string[]) => void;
+  /** バックエンドから届いたバッチ (典型 500 行)。fetched は累積 */
+  onRows?: (rows: (string | null)[][], fetched: number) => void;
+};
+
+/**
+ * SELECT を streaming 実行。バッチ毎に handlers.onRows が呼ばれる。
+ * Promise は最終結果 (総行数 + 経過 ms) で解決する。
+ * 途中でエラーが起きた場合は reject。
+ */
+export async function executeQueryStream(
+  connectionId: string,
+  sql: string,
+  database: string | null,
+  requestId: string,
+  handlers: StreamHandlers = {},
+): Promise<StreamResult> {
+  // dynamic import で tree-shake を妨げず最小依存に。
+  const { listen } = await import("@tauri-apps/api/event");
+  const unlistens: Array<() => void> = [];
+  let columns: string[] = [];
+
+  const cleanup = () => {
+    for (const u of unlistens) u();
+    unlistens.length = 0;
+  };
+
+  return await new Promise<StreamResult>((resolve, reject) => {
+    (async () => {
+      try {
+        unlistens.push(
+          await listen<{ columns: string[] }>(`query:${requestId}:columns`, (ev) => {
+            columns = ev.payload.columns;
+            handlers.onColumns?.(columns);
+          }),
+        );
+        unlistens.push(
+          await listen<{ rows: (string | null)[][]; fetched: number }>(
+            `query:${requestId}:rows`,
+            (ev) => {
+              handlers.onRows?.(ev.payload.rows, ev.payload.fetched);
+            },
+          ),
+        );
+        unlistens.push(
+          await listen<{ returned: number; elapsed_ms: number }>(
+            `query:${requestId}:done`,
+            (ev) => {
+              cleanup();
+              resolve({
+                kind: "select",
+                columns,
+                returned: ev.payload.returned,
+                elapsedMs: ev.payload.elapsed_ms,
+              });
+            },
+          ),
+        );
+        unlistens.push(
+          await listen<{ rows: number; elapsed_ms: number }>(
+            `query:${requestId}:affected`,
+            (ev) => {
+              cleanup();
+              resolve({
+                kind: "affected",
+                rows: ev.payload.rows,
+                elapsedMs: ev.payload.elapsed_ms,
+              });
+            },
+          ),
+        );
+        unlistens.push(
+          await listen<{ message: string }>(`query:${requestId}:error`, (ev) => {
+            cleanup();
+            reject(new Error(ev.payload.message));
+          }),
+        );
+
+        // 登録が完了してから Tauri command を起動する。
+        // command 自体が完了まで await するが、終了は event 経由で既に resolve されているはず。
+        try {
+          await invoke<void>("execute_query_stream", {
+            connectionId,
+            sql,
+            database: database ?? null,
+            requestId,
+          });
+        } catch (e) {
+          cleanup();
+          reject(e);
+        }
+      } catch (e) {
+        cleanup();
+        reject(e);
+      }
+    })();
+  });
+}
+
 export type SchemaSnapshot = {
   /** table name → column names (ordinal order) */
   tables: Record<string, string[]>;

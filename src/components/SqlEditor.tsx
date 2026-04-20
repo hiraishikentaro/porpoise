@@ -19,7 +19,7 @@ import {
   clearQueryHistory,
   deleteSnippet,
   type ExportFormat,
-  executeQuery,
+  executeQueryStream,
   exportQuery,
   listDatabases,
   listQueryHistory,
@@ -53,9 +53,24 @@ type RunTabResult =
   | { kind: "ok"; sql: string; result: QueryResult }
   | { kind: "error"; sql: string; message: string };
 
+/** SELECT を streaming 実行中の部分結果。行は ref で蓄積、fetched だけ state 管理 */
+type PartialSelect = {
+  columns: string[];
+  /** ref に置いた累積行への参照。描画時のみ index アクセス */
+  rowsRef: { current: (string | null)[][] };
+  /** これまでにサーバから届いた行数 */
+  fetched: number;
+};
+
 type RunState =
   | { kind: "idle" }
-  | { kind: "running"; requestId: string; index?: number; total?: number }
+  | {
+      kind: "running";
+      requestId: string;
+      index?: number;
+      total?: number;
+      partial?: PartialSelect;
+    }
   | { kind: "error"; message: string }
   | { kind: "done"; tabs: RunTabResult[] };
 
@@ -318,30 +333,106 @@ export function SqlEditor({
     };
   }, [connectionId, database]);
 
-  const run = useCallback(
-    async (sql: string, stmtStartLine: number) => {
-      const trimmed = sql.trim().replace(/;+\s*$/, "");
+  /**
+   * 1 statement を streaming で実行し、RunTabResult にまとめる。
+   * index/total は runMany 用 (単独実行時は undefined)。
+   */
+  const runOneStreaming = useCallback(
+    async (
+      stmt: string,
+      stmtStartLine: number,
+      opts: { index?: number; total?: number } = {},
+    ): Promise<RunTabResult> => {
+      const trimmed = stmt.trim().replace(/;+\s*$/, "");
       if (!trimmed) {
-        setRunState({ kind: "error", message: "Empty statement." });
-        return;
+        return { kind: "error", sql: stmt, message: "Empty statement." };
       }
-      viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
       const requestId = newRequestId();
-      setRunState({ kind: "running", requestId });
+      const rowsRef: { current: (string | null)[][] } = { current: [] };
+      let columnsSeen: string[] = [];
+      setRunState({
+        kind: "running",
+        requestId,
+        index: opts.index,
+        total: opts.total,
+      });
       try {
-        const result = await executeQuery(connectionId, trimmed, databaseRef.current, requestId);
-        setRunState({ kind: "done", tabs: [{ kind: "ok", sql: trimmed, result }] });
+        const result = await executeQueryStream(
+          connectionId,
+          trimmed,
+          databaseRef.current,
+          requestId,
+          {
+            onColumns: (cols) => {
+              columnsSeen = cols;
+              setRunState((prev) =>
+                prev.kind === "running" && prev.requestId === requestId
+                  ? {
+                      ...prev,
+                      partial: { columns: cols, rowsRef, fetched: 0 },
+                    }
+                  : prev,
+              );
+            },
+            onRows: (batch, fetched) => {
+              // rows は ref に累積、state は fetched だけ更新して再描画を軽くする
+              for (const r of batch) rowsRef.current.push(r);
+              setRunState((prev) =>
+                prev.kind === "running" && prev.requestId === requestId && prev.partial
+                  ? {
+                      ...prev,
+                      partial: { ...prev.partial, fetched },
+                    }
+                  : prev,
+              );
+            },
+          },
+        );
+        if (result.kind === "select") {
+          const qr: QueryResult = {
+            kind: "select",
+            columns: columnsSeen.length ? columnsSeen : result.columns,
+            rows: rowsRef.current,
+            returned: result.returned,
+            elapsed_ms: result.elapsedMs,
+          };
+          return { kind: "ok", sql: trimmed, result: qr };
+        }
+        const qr: QueryResult = {
+          kind: "affected",
+          rows: result.rows,
+          elapsed_ms: result.elapsedMs,
+        };
+        return { kind: "ok", sql: trimmed, result: qr };
       } catch (e) {
         const message = String(e);
-        setRunState({ kind: "error", message });
         const relLine = extractErrorLine(message);
         if (relLine !== null && viewRef.current) {
           const abs = stmtStartLine + relLine - 1;
           viewRef.current.dispatch({ effects: setErrorLineEffect.of(abs) });
         }
+        return { kind: "error", sql: trimmed, message };
       }
     },
     [connectionId],
+  );
+
+  const run = useCallback(
+    async (sql: string, stmtStartLine: number) => {
+      const trimmed = sql.trim();
+      if (!trimmed) {
+        setRunState({ kind: "error", message: "Empty statement." });
+        return;
+      }
+      viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
+      const tab = await runOneStreaming(trimmed, stmtStartLine);
+      if (tab.kind === "error") {
+        setRunState({ kind: "error", message: tab.message });
+      } else {
+        setRunState({ kind: "done", tabs: [tab] });
+      }
+    },
+    [runOneStreaming],
   );
 
   /** 複数ステートメントを順に実行し、全結果をタブに並べる */
@@ -359,19 +450,16 @@ export function SqlEditor({
       viewRef.current?.dispatch({ effects: setErrorLineEffect.of(null) });
       const tabs: RunTabResult[] = [];
       for (let i = 0; i < stmts.length; i++) {
-        const requestId = newRequestId();
-        setRunState({ kind: "running", requestId, index: i + 1, total: stmts.length });
-        try {
-          const result = await executeQuery(connectionId, stmts[i], databaseRef.current, requestId);
-          tabs.push({ kind: "ok", sql: stmts[i], result });
-        } catch (e) {
-          tabs.push({ kind: "error", sql: stmts[i], message: String(e) });
-          // エラーでも残りは継続 (TablePlus と同じ挙動)
-        }
+        const tab = await runOneStreaming(stmts[i], 1, {
+          index: i + 1,
+          total: stmts.length,
+        });
+        tabs.push(tab);
+        // エラーでも残りは継続 (TablePlus と同じ挙動)
       }
       setRunState({ kind: "done", tabs });
     },
-    [connectionId, run],
+    [run, runOneStreaming],
   );
 
   const runAt = useCallback(() => {
@@ -1360,8 +1448,8 @@ function ResultsPane({
     const suffix =
       runState.total && runState.total > 1 ? ` (${runState.index} / ${runState.total})` : "";
     return (
-      <div className="flex flex-1 flex-col gap-2 border-t border-border px-4 py-3 text-xs text-muted-foreground">
-        <div className="flex items-center gap-2">
+      <div className="flex flex-1 min-h-0 flex-col border-t border-border">
+        <div className="flex items-center gap-2 border-b border-border/50 px-4 py-1.5 text-xs text-muted-foreground">
           <span
             aria-hidden
             className="inline-block h-1.5 w-1.5 animate-pulse rounded-full bg-accent"
@@ -1370,6 +1458,12 @@ function ResultsPane({
             {t("editor.running")}
             {suffix}…
           </span>
+          {runState.partial && (
+            <span className="tp-num text-foreground/85">
+              {runState.partial.fetched.toLocaleString()}
+              <span className="text-muted-foreground/70"> rows</span>
+            </span>
+          )}
           <button
             type="button"
             onClick={() => {
@@ -1381,14 +1475,18 @@ function ResultsPane({
             {t("editor.cancel")}
           </button>
         </div>
-        <div className="relative h-[3px] w-full overflow-hidden rounded-full bg-accent/10">
+        <div className="relative h-[2px] w-full overflow-hidden bg-accent/10">
           <span className="block h-full w-1/3 animate-[indeterminate_1.15s_ease-in-out_infinite] bg-accent" />
         </div>
-        <div className="flex flex-col gap-1.5 pt-1">
-          <Skeleton className="h-2.5" style={{ width: "70%" }} />
-          <Skeleton className="h-2.5" style={{ width: "50%" }} />
-          <Skeleton className="h-2.5" style={{ width: "60%" }} />
-        </div>
+        {runState.partial && runState.partial.columns.length > 0 ? (
+          <StreamingPreview partial={runState.partial} />
+        ) : (
+          <div className="flex flex-col gap-1.5 px-4 py-3 text-xs text-muted-foreground">
+            <Skeleton className="h-2.5" style={{ width: "70%" }} />
+            <Skeleton className="h-2.5" style={{ width: "50%" }} />
+            <Skeleton className="h-2.5" style={{ width: "60%" }} />
+          </div>
+        )}
       </div>
     );
   }
@@ -1818,6 +1916,77 @@ function extractFromTable(sql: string): string {
   const m = sql.match(/\bFROM\s+`?([\w$]+)`?(?:\s*\.\s*`?([\w$]+)`?)?/i);
   if (!m) return "exported_rows";
   return m[2] ?? m[1] ?? "exported_rows";
+}
+
+/**
+ * Streaming 中の簡易プレビュー。現在届いている列と行数を仮想化グリッドで出す。
+ * soft (column resize/sort/selection は無し) — 流れてくる行をとりあえず見せることに特化。
+ */
+function StreamingPreview({ partial }: { partial: PartialSelect }) {
+  const parentRef = useRef<HTMLDivElement>(null);
+  const virtualizer = useVirtualizer({
+    count: partial.fetched,
+    getScrollElement: () => parentRef.current,
+    estimateSize: () => 28,
+    overscan: 20,
+  });
+  const virtualItems = virtualizer.getVirtualItems();
+  const totalHeight = virtualizer.getTotalSize();
+  const colWidth = 160;
+  const totalWidth = partial.columns.length * colWidth;
+  return (
+    <div ref={parentRef} className="min-h-0 flex-1 overflow-auto">
+      <div style={{ width: totalWidth, position: "relative" }}>
+        <div
+          className="sticky top-0 z-10 flex border-b border-border bg-background/95 text-[0.7rem] uppercase tracking-wide text-muted-foreground backdrop-blur"
+          style={{ width: totalWidth }}
+        >
+          {partial.columns.map((c) => (
+            <div
+              key={c}
+              style={{ width: colWidth }}
+              className="truncate border-r border-border/60 px-3 py-2"
+            >
+              {c}
+            </div>
+          ))}
+        </div>
+        <div style={{ height: totalHeight, position: "relative" }}>
+          {virtualItems.map((v) => {
+            const row = partial.rowsRef.current[v.index];
+            if (!row) return null;
+            return (
+              <div
+                key={v.key}
+                className="absolute top-0 left-0 flex border-b border-border/30 text-sm hover:bg-sidebar-accent/30"
+                style={{
+                  width: totalWidth,
+                  height: v.size,
+                  transform: `translateY(${v.start}px)`,
+                }}
+              >
+                {row.map((cell, ci) => (
+                  <div
+                    // biome-ignore lint/suspicious/noArrayIndexKey: cells in a row have no stable identity
+                    key={`${v.key}:${ci}`}
+                    style={{ width: colWidth }}
+                    className="shrink-0 truncate border-r border-border/20 px-3 py-1.5"
+                    title={cell ?? ""}
+                  >
+                    {cell === null ? (
+                      <span className="text-muted-foreground/60 italic">NULL</span>
+                    ) : (
+                      cell
+                    )}
+                  </div>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
 }
 
 /**
