@@ -556,6 +556,21 @@ function App() {
         return;
       }
 
+      // ⌘1〜⌘9 で N 番目のタブにジャンプ (1-origin、9 は "last tab")
+      if (/^[1-9]$/.test(key) && !e.shiftKey) {
+        const all = tabsRef.current;
+        if (all.length === 0) return;
+        const n = Number(key);
+        const idx = key === "9" ? all.length - 1 : Math.min(n - 1, all.length - 1);
+        const target = all[idx];
+        if (target) {
+          e.preventDefault();
+          e.stopPropagation();
+          setActiveTabId(target.id);
+        }
+        return;
+      }
+
       // ⌘, で settings (macOS 慣習)
       if (key === ",") {
         e.preventDefault();
