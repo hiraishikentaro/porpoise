@@ -1633,7 +1633,7 @@ function SingleResultView({
     const ctx = canvas.getContext("2d");
     if (ctx) {
       ctx.font =
-        '14px "Inter Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui, sans-serif';
+        '14px "Geist Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui, sans-serif';
     }
     setColWidths(measureResultCols(ctx, tab.result.columns, tab.result.rows));
   }, [tab]);

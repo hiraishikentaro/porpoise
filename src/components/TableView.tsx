@@ -385,7 +385,7 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
     if (ctx) {
       // TableView のセル文字と同じフォント指定 (index.css の --font-sans と揃える)
       ctx.font =
-        '14px "Inter Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui, sans-serif';
+        '14px "Geist Variable", -apple-system, BlinkMacSystemFont, "Hiragino Sans", "Segoe UI", system-ui, sans-serif';
     }
     return ctx;
   }, []);
