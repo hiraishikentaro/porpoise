@@ -34,6 +34,7 @@ import {
   schemaSnapshot,
   updateSnippet,
 } from "@/lib/tauri";
+import { useToast } from "@/lib/toast";
 
 type Props = {
   connectionId: string;
@@ -1614,9 +1615,9 @@ function SingleResultView({
   const [anchor, setAnchor] = useState<number | null>(null);
   const [sort, setSort] = useState<SortState>(null);
   const [ctxMenu, setCtxMenu] = useState<{ x: number; y: number } | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
   const [cellView, setCellView] = useState<{ column: string; value: string | null } | null>(null);
   const filterRef = useRef<HTMLInputElement>(null);
+  const toast = useToast();
 
   // 新しい結果に切り替わったら filter/selection/sort クリア + 列幅再計算
   useEffect(() => {
@@ -1776,13 +1777,17 @@ function SingleResultView({
     const text = formatRowsAs(pickRows, cols, format, extractFromTable(tab.sql));
     try {
       await navigator.clipboard.writeText(text);
-      setToast(
-        `Copied ${pickRows.length} row${pickRows.length === 1 ? "" : "s"} as ${format.toUpperCase()}`,
-      );
-      window.setTimeout(() => setToast(null), 2500);
+      toast.push({
+        kind: "success",
+        title: "Copied",
+        message: `${pickRows.length} row${pickRows.length === 1 ? "" : "s"} as ${format.toUpperCase()}`,
+      });
     } catch {
-      setToast("Copy failed");
-      window.setTimeout(() => setToast(null), 2500);
+      toast.push({
+        kind: "error",
+        title: "Copy failed",
+        message: "Clipboard write rejected.",
+      });
     }
     setCtxMenu(null);
   }
@@ -1917,12 +1922,6 @@ function SingleResultView({
               {label}
             </button>
           ))}
-        </div>
-      )}
-
-      {toast && (
-        <div className="pointer-events-none absolute right-4 bottom-4 rounded-md border border-accent/40 bg-card/95 px-3 py-1.5 text-[0.72rem] shadow-lg backdrop-blur">
-          {toast}
         </div>
       )}
 
@@ -2164,14 +2163,13 @@ function QueryExportMenu({
 }) {
   const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState<ExportFormat | null>(null);
-  const [toast, setToast] = useState<string | null>(null);
+  const toast = useToast();
 
   async function run(format: ExportFormat) {
     setOpen(false);
     const sql = lastSql.current.trim().replace(/;+\s*$/, "");
     if (!sql) {
-      setToast("No query to export");
-      window.setTimeout(() => setToast(null), 3000);
+      toast.push({ kind: "info", title: "Export", message: "No query to export." });
       return;
     }
     setBusy(format);
@@ -2183,11 +2181,13 @@ function QueryExportMenu({
       });
       if (!path) return;
       const result = await exportQuery({ connectionId, database, sql, format, path });
-      setToast(`Exported ${result.rows.toLocaleString()} rows`);
-      window.setTimeout(() => setToast(null), 4000);
+      toast.push({
+        kind: "success",
+        title: `Exported as ${format.toUpperCase()}`,
+        message: `${result.rows.toLocaleString()} rows`,
+      });
     } catch (e) {
-      setToast(`Failed: ${String(e)}`);
-      window.setTimeout(() => setToast(null), 6000);
+      toast.push({ kind: "error", title: "Export failed", message: String(e) });
     } finally {
       setBusy(null);
     }
@@ -2233,11 +2233,6 @@ function QueryExportMenu({
             ))}
           </div>
         </>
-      )}
-      {toast && (
-        <div className="pointer-events-none absolute right-0 top-full z-40 mt-1 max-w-[360px] rounded-md border border-accent/40 bg-card/95 px-3 py-1.5 text-[0.7rem] shadow-lg backdrop-blur">
-          {toast}
-        </div>
       )}
     </div>
   );
