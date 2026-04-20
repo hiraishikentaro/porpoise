@@ -1,11 +1,15 @@
 use mysql_async::prelude::Queryable;
 use mysql_async::{Pool, Row, Value};
 use serde::Serialize;
-use tauri::State;
+use tauri::{AppHandle, Emitter, State};
 use uuid::Uuid;
 
 use crate::error::{AppError, AppResult};
 use crate::state::{AppState, RunningQuery};
+
+/// 一度に送る行数。大きすぎると Tauri IPC のサイズで詰まり、小さすぎると
+/// イベント送出のオーバーヘッドが支配的になる。500 は体感と負荷のバランス。
+const STREAM_BATCH_ROWS: usize = 500;
 
 /// MySQL の管理系スキーマ。一覧から除外する。
 const SYSTEM_SCHEMAS: &[&str] = &["information_schema", "performance_schema", "mysql", "sys"];
@@ -556,6 +560,197 @@ async fn run_on_conn(
             elapsed_ms,
         })
     }
+}
+
+/// `mysql_async::QueryResult::next` が返す Row を cell の Vec<Option<String>> に展開する。
+fn row_to_cells(row: Row) -> Vec<Option<String>> {
+    row.unwrap().into_iter().map(value_to_display).collect()
+}
+
+#[derive(Serialize, Clone)]
+struct ColumnsPayload {
+    columns: Vec<String>,
+}
+
+#[derive(Serialize, Clone)]
+struct RowsPayload {
+    rows: Vec<Vec<Option<String>>>,
+    fetched: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct DonePayload {
+    returned: u64,
+    elapsed_ms: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct AffectedPayload {
+    rows: u64,
+    elapsed_ms: u64,
+}
+
+#[derive(Serialize, Clone)]
+struct ErrorPayload {
+    message: String,
+}
+
+/// Streaming 版 execute_query。結果を Tauri イベントで段階的にフロントに流す。
+/// - `query:{request_id}:columns` (SELECT の最初)
+/// - `query:{request_id}:rows` (`STREAM_BATCH_ROWS` 行ずつ、末尾端数も)
+/// - `query:{request_id}:done` (SELECT 完了)
+/// - `query:{request_id}:affected` (DML / DDL)
+/// - `query:{request_id}:error` (途中で失敗)
+///
+/// 命令自体は await で完了まで保持するため、フロントは await 解決 = 終了と見なしてよい。
+/// エラーは AppError ではなく error イベントで通知し、command は Ok(()) を返す
+/// (そうしないと同じエラーが Tauri error と event の両方で来る)。
+#[tauri::command]
+pub async fn execute_query_stream(
+    app: AppHandle,
+    state: State<'_, AppState>,
+    connection_id: Uuid,
+    sql: String,
+    database: Option<String>,
+    request_id: Uuid,
+) -> AppResult<()> {
+    let pool = pool_of(&state, connection_id)?;
+    let res = stream_query_body(
+        &app,
+        &pool,
+        &sql,
+        database.as_deref(),
+        connection_id,
+        request_id,
+        &state,
+    )
+    .await;
+
+    // cleanup running_queries regardless
+    {
+        let mut running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
+        running.remove(&request_id);
+    }
+
+    match res {
+        Ok(()) => Ok(()),
+        Err(e) => {
+            let _ = app.emit(
+                &format!("query:{}:error", request_id),
+                ErrorPayload {
+                    message: e.to_string(),
+                },
+            );
+            tracing::warn!(?request_id, "execute_query_stream failed: {e}");
+            Ok(())
+        }
+    }
+}
+
+async fn stream_query_body(
+    app: &AppHandle,
+    pool: &Pool,
+    sql: &str,
+    database: Option<&str>,
+    connection_id: Uuid,
+    request_id: Uuid,
+    state: &State<'_, AppState>,
+) -> AppResult<()> {
+    let mut conn = pool.get_conn().await?;
+    let thread_id = conn.id();
+    {
+        let mut running = state
+            .running_queries
+            .lock()
+            .expect("running_queries poisoned");
+        running.insert(
+            request_id,
+            RunningQuery {
+                connection_id,
+                mysql_thread_id: thread_id,
+            },
+        );
+    }
+
+    let start = std::time::Instant::now();
+
+    if let Some(db) = database.map(str::trim).filter(|s| !s.is_empty()) {
+        conn.query_drop(format!("USE {}", quote_ident(db))).await?;
+    }
+
+    let mut result = conn.query_iter(sql.to_string()).await?;
+    let columns_arc = result.columns();
+    let columns: Vec<String> = columns_arc
+        .as_ref()
+        .map(|cols| cols.iter().map(|c| c.name_str().to_string()).collect())
+        .unwrap_or_default();
+    let has_columns = columns_arc.is_some() && !columns.is_empty();
+    drop(columns_arc);
+
+    if has_columns {
+        let _ = app.emit(
+            &format!("query:{}:columns", request_id),
+            ColumnsPayload {
+                columns: columns.clone(),
+            },
+        );
+        let ch_rows = format!("query:{}:rows", request_id);
+        let mut batch: Vec<Vec<Option<String>>> = Vec::with_capacity(STREAM_BATCH_ROWS);
+        let mut total: u64 = 0;
+        while let Some(row) = result.next().await? {
+            batch.push(row_to_cells(row));
+            total += 1;
+            if batch.len() >= STREAM_BATCH_ROWS {
+                let payload = RowsPayload {
+                    rows: std::mem::take(&mut batch),
+                    fetched: total,
+                };
+                let _ = app.emit(&ch_rows, payload);
+                batch.reserve(STREAM_BATCH_ROWS);
+            }
+        }
+        result.drop_result().await.ok();
+        if !batch.is_empty() {
+            let _ = app.emit(
+                &ch_rows,
+                RowsPayload {
+                    rows: batch,
+                    fetched: total,
+                },
+            );
+        }
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        tracing::info!(
+            returned = total,
+            elapsed_ms,
+            "execute_query_stream (select) ok"
+        );
+        let _ = app.emit(
+            &format!("query:{}:done", request_id),
+            DonePayload {
+                returned: total,
+                elapsed_ms,
+            },
+        );
+    } else {
+        let _: Vec<Row> = result.collect_and_drop().await?;
+        let affected = conn.affected_rows();
+        let elapsed_ms = start.elapsed().as_millis() as u64;
+        tracing::info!(affected, elapsed_ms, "execute_query_stream (dml) ok");
+        let _ = app.emit(
+            &format!("query:{}:affected", request_id),
+            AffectedPayload {
+                rows: affected,
+                elapsed_ms,
+            },
+        );
+    }
+
+    conn.disconnect().await.ok();
+    Ok(())
 }
 
 /// 実行中クエリを `KILL QUERY {thread_id}` で中断。
