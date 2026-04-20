@@ -49,7 +49,6 @@ pub fn pool_of(state: &State<'_, AppState>, id: Uuid) -> AppResult<Pool> {
 async fn query_rows(pool: &Pool, sql: String) -> AppResult<Vec<Row>> {
     let mut conn = pool.get_conn().await?;
     let rows: Vec<Row> = conn.query(sql).await?;
-    conn.disconnect().await.ok();
     Ok(rows)
 }
 
@@ -316,7 +315,6 @@ pub async fn select_table_rows(
         .unwrap_or_default();
 
     let rows: Vec<Row> = result.collect_and_drop().await?;
-    conn.disconnect().await.ok();
 
     let returned = rows.len() as u64;
     let cells: Vec<Vec<Option<String>>> = rows
@@ -377,7 +375,6 @@ pub async fn list_all_tables(
             (),
         )
         .await?;
-    conn.disconnect().await.ok();
     Ok(rows
         .into_iter()
         .map(|(db, name, ty)| AllTablesEntry {
@@ -405,7 +402,6 @@ pub async fn schema_snapshot(
                WHERE TABLE_SCHEMA = ?
                ORDER BY TABLE_NAME, ORDINAL_POSITION";
     let rows: Vec<(String, String)> = conn.exec(sql, (database.clone(),)).await?;
-    conn.disconnect().await.ok();
 
     let mut tables: std::collections::BTreeMap<String, Vec<String>> =
         std::collections::BTreeMap::new();
@@ -511,7 +507,6 @@ async fn run_with_registration(
             .expect("running_queries poisoned");
         running.remove(&rid);
     }
-    conn.disconnect().await.ok();
 
     outcome
 }
@@ -749,7 +744,6 @@ async fn stream_query_body(
         );
     }
 
-    conn.disconnect().await.ok();
     Ok(())
 }
 
@@ -771,7 +765,6 @@ pub async fn cancel_query(state: State<'_, AppState>, request_id: Uuid) -> AppRe
     let mut conn = pool.get_conn().await?;
     let kill_sql = format!("KILL QUERY {}", handle.mysql_thread_id);
     let res = conn.query_drop(kill_sql).await;
-    conn.disconnect().await.ok();
     match res {
         Ok(()) => {
             tracing::info!(
