@@ -144,6 +144,30 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
   const [appliedFilters, setAppliedFilters] = useState<Filter[]>([]);
   /** 現在適用されている filter draft の id 集合。UI の "Applied" 表示用 */
   const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
+  /** FilterBar が開いた直後にフォーカスを当てたい draft id (1 回だけ消費される) */
+  const [pendingFocusDraftId, setPendingFocusDraftId] = useState<string | null>(null);
+
+  // Filter ボタン押下: トグル + 開くなら draft 0 件のとき 1 件自動追加 + value にフォーカス
+  function toggleFiltersWithAutoDraft() {
+    setFiltersOpen((open) => {
+      const next = !open;
+      if (next && filterDrafts.length === 0) {
+        const cols = state.columnNames.length ? state.columnNames : columns.map((c) => c.name);
+        const id = `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`;
+        setFilterDrafts([
+          {
+            id,
+            column: cols[0] ?? "",
+            op: "eq",
+            value: "",
+            checked: true,
+          },
+        ]);
+        setPendingFocusDraftId(id);
+      }
+      return next;
+    });
+  }
 
   // Click anywhere / Esc で閉じる
   useEffect(() => {
@@ -298,7 +322,7 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
       {
         id: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
         column,
-        op: "like",
+        op: "eq",
         value: "",
         checked: true,
       },
@@ -638,13 +662,14 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
         <div className="flex items-center gap-1.5">
           <button
             type="button"
-            onClick={() => setFiltersOpen((v) => !v)}
+            data-table-filter-toggle
+            onClick={toggleFiltersWithAutoDraft}
             className={`inline-flex h-6 items-center gap-1 rounded-md border px-2 text-[0.7rem] transition-colors ${
               filtersOpen || appliedFilters.length > 0
                 ? "border-accent/60 bg-accent/10 text-accent"
                 : "border-border text-muted-foreground hover:border-accent/60 hover:text-accent"
             }`}
-            title="Toggle filter bar"
+            title="Toggle filter bar (⌘F)"
           >
             Filter{appliedFilters.length > 0 ? ` · ${appliedFilters.length}` : ""}
           </button>
@@ -702,6 +727,8 @@ export function TableView({ connectionId, database, table, columns, tabId }: Pro
           tableName={table}
           database={database}
           appliedCount={appliedFilters.length}
+          pendingFocusDraftId={pendingFocusDraftId}
+          onFocusConsumed={() => setPendingFocusDraftId(null)}
         />
       )}
 
@@ -1144,6 +1171,8 @@ function FilterBar({
   tableName,
   database,
   appliedCount,
+  pendingFocusDraftId,
+  onFocusConsumed,
 }: {
   columns: string[];
   drafts: FilterDraft[];
@@ -1155,8 +1184,22 @@ function FilterBar({
   tableName: string;
   database: string;
   appliedCount: number;
+  pendingFocusDraftId?: string | null;
+  onFocusConsumed?: () => void;
 }) {
   const [sqlOpen, setSqlOpen] = useState(false);
+  const valueInputsRef = useRef<Map<string, HTMLInputElement>>(new Map());
+
+  // 親から focus が要求されたら一度だけ実行して消費完了を通知
+  useEffect(() => {
+    if (!pendingFocusDraftId) return;
+    const el = valueInputsRef.current.get(pendingFocusDraftId);
+    if (el) {
+      el.focus();
+      el.select();
+      onFocusConsumed?.();
+    }
+  }, [pendingFocusDraftId, onFocusConsumed]);
   function updateDraft(id: string, patch: Partial<FilterDraft>) {
     setDrafts((prev) => prev.map((d) => (d.id === id ? { ...d, ...patch } : d)));
   }
@@ -1166,7 +1209,7 @@ function FilterBar({
       {
         id: `f-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 5)}`,
         column: columns[0] ?? "",
-        op: "like",
+        op: "eq",
         value: "",
         checked: true,
       },
@@ -1229,6 +1272,10 @@ function FilterBar({
                     ))}
                   </select>
                   <input
+                    ref={(el) => {
+                      if (el) valueInputsRef.current.set(d.id, el);
+                      else valueInputsRef.current.delete(d.id);
+                    }}
                     placeholder={op.hasValue ? "value" : "— no value —"}
                     value={d.value}
                     disabled={!op.hasValue}
