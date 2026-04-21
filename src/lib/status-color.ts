@@ -7,14 +7,14 @@ export const STATUS_COLORS: StatusColor[] = ["gray", "blue", "amber", "green", "
  * contrasting foreground. Gradients read as "inked lozenge" rather than flat
  * circles, which is the one detail you notice at 20 px.
  */
-// Tokyo Night 由来の 6 色を avatar palette に割り当てる
+// GitHub Primer 由来の 6 色を avatar palette に割り当てる
 const palette: Record<StatusColor, { from: string; to: string; fg: string; ring: string }> = {
-  gray: { from: "#565f89", to: "#414868", fg: "#c0caf5", ring: "#565f89" },
-  blue: { from: "#7aa2f7", to: "#3d59a1", fg: "#1a1b26", ring: "#7aa2f7" },
-  amber: { from: "#e0af68", to: "#b08a46", fg: "#1a1b26", ring: "#e0af68" },
-  green: { from: "#9ece6a", to: "#73a252", fg: "#1a1b26", ring: "#9ece6a" },
-  red: { from: "#f7768e", to: "#c4556e", fg: "#1a1b26", ring: "#f7768e" },
-  pink: { from: "#bb9af7", to: "#9070c4", fg: "#1a1b26", ring: "#bb9af7" },
+  gray: { from: "#484f58", to: "#30363d", fg: "#e6edf3", ring: "#484f58" },
+  blue: { from: "#2f81f7", to: "#1f6feb", fg: "#0d1117", ring: "#2f81f7" },
+  amber: { from: "#d29922", to: "#9e6a03", fg: "#0d1117", ring: "#d29922" },
+  green: { from: "#3fb950", to: "#2ea043", fg: "#0d1117", ring: "#3fb950" },
+  red: { from: "#f85149", to: "#da3633", fg: "#0d1117", ring: "#f85149" },
+  pink: { from: "#bc8cff", to: "#8957e5", fg: "#0d1117", ring: "#bc8cff" },
 };
 
 export function statusColorVars(color: StatusColor): React.CSSProperties {

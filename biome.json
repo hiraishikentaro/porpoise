@@ -7,7 +7,14 @@
   },
   "files": {
     "ignoreUnknown": false,
-    "includes": ["**", "!src/components/ui", "!src-tauri/target", "!dist", "!node_modules"]
+    "includes": [
+      "**",
+      "!src/components/ui",
+      "!src-tauri/target",
+      "!dist",
+      "!node_modules",
+      "!design_system"
+    ]
   },
   "formatter": {
     "enabled": true,

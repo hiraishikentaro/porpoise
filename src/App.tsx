@@ -1,3 +1,4 @@
+import type React from "react";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CommandPalette } from "@/components/CommandPalette";
 import { ConnectingOverlay } from "@/components/ConnectingOverlay";
@@ -12,6 +13,7 @@ import { type Tab, TabBar } from "@/components/TabBar";
 import { TableDetail } from "@/components/TableDetail";
 import { ToastStack } from "@/components/ToastStack";
 import { KbdHint } from "@/components/ui/kbd-hint";
+import { PorpoiseLockup, PorpoiseMark } from "@/components/ui/porpoise-mark";
 import { useT } from "@/lib/i18n";
 import { useSettings } from "@/lib/settings";
 import {
@@ -713,20 +715,11 @@ function App() {
               >
                 <PlusIcon />
               </button>
-              <div className="flex items-center gap-1.5">
-                <span
-                  aria-hidden
-                  className="inline-block h-1.5 w-1.5 rounded-full bg-accent shadow-[0_0_6px_1px_var(--accent-glow)]"
-                />
-                <span
-                  className="text-[0.85rem] tracking-tight"
-                  style={{
-                    fontFamily: "var(--font-display)",
-                    fontVariationSettings: '"SOFT" 50, "wght" 520, "opsz" 24',
-                  }}
-                >
-                  Porpoise
-                </span>
+              <div
+                className="flex items-center"
+                style={{ "--mark-bg": "var(--sidebar)" } as React.CSSProperties}
+              >
+                <PorpoiseLockup size={20} />
               </div>
               <div className="flex items-center gap-1">
                 <button
@@ -868,7 +861,29 @@ function App() {
                       "radial-gradient(ellipse 80% 60% at 50% 35%, black 30%, transparent 75%)",
                   }}
                 />
-                <div className="relative z-10 w-full max-w-3xl">
+                <div className="relative z-10 flex w-full max-w-3xl flex-col gap-8">
+                  <div
+                    className="flex items-center gap-4"
+                    style={{ "--mark-bg": "var(--background)" } as React.CSSProperties}
+                  >
+                    <PorpoiseMark size={56} title="Porpoise" />
+                    <div className="flex flex-col gap-1">
+                      <span
+                        style={{
+                          fontFamily: "var(--font-sans)",
+                          fontWeight: 200,
+                          fontSize: "44px",
+                          letterSpacing: "-0.045em",
+                          lineHeight: 0.95,
+                        }}
+                      >
+                        porpoise
+                      </span>
+                      <span className="font-mono text-[0.68rem] uppercase tracking-[0.14em] text-accent">
+                        {selected ? "edit connection" : "new connection"}
+                      </span>
+                    </div>
+                  </div>
                   <ConnectionForm
                     initial={selected}
                     onSaved={handleSaved}
