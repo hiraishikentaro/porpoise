@@ -204,7 +204,11 @@
 @layer components {
   /* ---- Inputs ---- */
   .tp-input {
-    @apply h-9 w-full rounded-md border border-transparent bg-input px-3 text-sm text-foreground;
+    @apply h-9 w-full rounded-md bg-input px-3 text-sm text-foreground;
+    /* Primer スタイルに合わせ、デフォルトで可視のボーダーを出す。
+     * 以前は border-transparent + bg tint に頼っていたが、light では
+     * --input と --background がどちらも #ffffff なので完全に溶けてしまう。 */
+    border: 1px solid var(--border-strong);
     transition:
       border-color 160ms ease,
       background-color 160ms ease,
@@ -215,7 +219,7 @@
     opacity: 0.7;
   }
   .tp-input:hover {
-    border-color: var(--border-strong);
+    border-color: var(--accent);
   }
   .tp-input:focus {
     outline: none;
